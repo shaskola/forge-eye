@@ -128,17 +128,11 @@ function isUnsettled(t: Record<string, unknown>): boolean {
   if (sessionStatus === 'starting' || sessionStatus === 'running') return true
   const latestTurn = (t.latestTurn ?? null) as Record<string, unknown> | null
   if (latestTurn && String(latestTurn.state ?? '') === 'running') return true
-  if (t.backgroundLiveness === 'working') return true
+  if (latestTurn && latestTurn.completedAt == null && latestTurn.startedAt) return true
+  const background = String(t.backgroundLiveness ?? '')
+  if (background === 'working' || background === 'monitoring') return true
   if (t.settledOverride === 'settled') return false
   return true
-}
-
-function asStatus(raw: unknown): AgentStatus {
-  const s = String(raw ?? '').toLowerCase()
-  if (s.includes('run') || s === 'starting' || s === 'streaming' || s === 'busy') return 'running'
-  if (s.includes('error') || s.includes('fail')) return 'error'
-  if (s.includes('ready') || s.includes('idle') || s === 'connected' || s === 'stopped') return 'idle'
-  return 'unknown'
 }
 
 function firstIso(...values: unknown[]): string | null {
@@ -149,13 +143,35 @@ function firstIso(...values: unknown[]): string | null {
   return null
 }
 
+/** Igual que el sidebar de T3: sesión viva o trabajo en segundo plano = trabajando. */
+function resolveAgentStatus(t: Record<string, unknown>): AgentStatus {
+  const session = (t.session ?? null) as Record<string, unknown> | null
+  const sessionStatus = String(session?.status ?? '')
+  const latestTurn = (t.latestTurn ?? null) as Record<string, unknown> | null
+  const turnState = latestTurn ? String(latestTurn.state ?? '') : ''
+  const background = String(t.backgroundLiveness ?? '')
+  const planProgress = t.planProgress
+
+  if (sessionStatus === 'running' || sessionStatus === 'starting') return 'running'
+  if (background === 'working' || background === 'monitoring') return 'running'
+  if (turnState === 'running') return 'running'
+  if (latestTurn && latestTurn.completedAt == null && latestTurn.startedAt) return 'running'
+  if (planProgress && typeof planProgress === 'object') return 'running'
+  if (sessionStatus === 'error' || turnState === 'error' || session?.lastError) return 'error'
+  return 'idle'
+}
+
 function resolveStartedAt(t: Record<string, unknown>): string | null {
   const session = (t.session ?? null) as Record<string, unknown> | null
   const latestTurn = (t.latestTurn ?? null) as Record<string, unknown> | null
+  const background = String(t.backgroundLiveness ?? '')
   if (latestTurn && latestTurn.completedAt == null) {
-    return firstIso(latestTurn.startedAt, latestTurn.requestedAt, session?.updatedAt)
+    return firstIso(latestTurn.startedAt, latestTurn.requestedAt, session?.updatedAt, t.updatedAt)
   }
-  return firstIso(session?.updatedAt)
+  if (background === 'working' || background === 'monitoring') {
+    return firstIso(session?.updatedAt, t.updatedAt, latestTurn?.startedAt)
+  }
+  return firstIso(session?.updatedAt, t.updatedAt)
 }
 
 function normalizeSnapshot(snapshot: SnapshotLike): AgentThread[] {
@@ -178,13 +194,7 @@ function normalizeSnapshot(snapshot: SnapshotLike): AgentThread[] {
     const planProgress = (t.planProgress ?? null) as Record<string, unknown> | null
     const turnState = latestTurn ? String(latestTurn.state ?? '') : ''
     const background = String(t.backgroundLiveness ?? '')
-
-    let status = asStatus(session.status)
-    if (status === 'unknown' || status === 'idle') {
-      if (turnState === 'running' || background === 'working') status = 'running'
-      else if (turnState === 'error' || session.lastError) status = 'error'
-      else if (turnState === 'completed' || turnState === 'interrupted' || !latestTurn) status = 'idle'
-    }
+    const status = resolveAgentStatus(t)
 
     const lastLine =
       String(planProgress?.step ?? '').trim() ||
@@ -239,6 +249,50 @@ function normalizeMessages(raw: unknown[]): ChatMessage[] {
   return out
 }
 
+function mergeDefined(
+  existing: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...(existing ?? {}) }
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined) continue
+    const prev = next[key]
+    if (
+      (key === 'session' || key === 'latestTurn') &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      prev &&
+      typeof prev === 'object' &&
+      !Array.isArray(prev)
+    ) {
+      next[key] = { ...(prev as Record<string, unknown>), ...(value as Record<string, unknown>) }
+    } else {
+      next[key] = value
+    }
+  }
+  return next
+}
+
+function unwrapStreamValue(raw: unknown): Record<string, unknown>[] {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return raw.flatMap(unwrapStreamValue)
+  if (typeof raw !== 'object') return []
+  const item = raw as Record<string, unknown>
+  if (item.value !== undefined && typeof item.kind !== 'string') {
+    return unwrapStreamValue(item.value)
+  }
+  if (item.item !== undefined && typeof item.kind !== 'string') {
+    return unwrapStreamValue(item.item)
+  }
+  if (typeof item.kind !== 'string' && typeof item._tag === 'string') {
+    const tag = String(item._tag)
+    const kind = tag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
+    return [{ ...item, kind }]
+  }
+  return [item]
+}
+
 export class T3Client {
   private ws: WebSocket | null = null
   private pending = new Map<
@@ -257,6 +311,9 @@ export class T3Client {
   private rawProjects: Array<Record<string, unknown>> = []
   private rawThreads: Array<Record<string, unknown>> = []
   private threadRequestId: string | null = null
+  private shellRequestId: string | null = null
+  private lastShellSubscribeAt = 0
+  private snapshotWaiters = new Set<() => void>()
   private previews = new Map<string, string>()
   private workingSince = new Map<string, string>()
 
@@ -447,7 +504,8 @@ export class T3Client {
       this.connection = 'online'
       this.lastError = ''
       this.emit()
-      this.subscribeShell()
+      this.subscribeShell({ force: true })
+      this.startShellPoll()
     }
 
     this.ws.onmessage = (ev) => {
@@ -496,6 +554,8 @@ export class T3Client {
       this.handshakeTimer = null
     }
     this.threadRequestId = null
+    this.shellRequestId = null
+    this.resolveSnapshotWaiters()
     this.openThreadId = null
     this.chatLoading = false
     this.messages = []
@@ -547,7 +607,9 @@ export class T3Client {
       if (tag === 'Chunk') {
         const values = Array.isArray(msg.values) ? msg.values : []
         for (const value of values) {
-          if (value && typeof value === 'object') this.applyStreamItem(value as Record<string, unknown>)
+          for (const item of unwrapStreamValue(value)) {
+            this.applyStreamItem(item)
+          }
         }
         continue
       }
@@ -555,6 +617,7 @@ export class T3Client {
       if (tag !== 'Exit') continue
 
       const requestId = String(msg.requestId ?? '')
+      this.onStreamExit(requestId)
       if (!requestId || !this.pending.has(requestId)) continue
       const entry = this.pending.get(requestId)!
       this.pending.delete(requestId)
@@ -684,7 +747,7 @@ export class T3Client {
   private patchRawThread(threadId: string, patch: Record<string, unknown>) {
     const idx = this.rawThreads.findIndex((t) => String(t.id) === threadId)
     if (idx < 0) return
-    this.rawThreads[idx] = { ...this.rawThreads[idx], ...patch }
+    this.rawThreads[idx] = mergeDefined(this.rawThreads[idx], patch)
   }
 
   private setMessages(messages: ChatMessage[], threadId?: string) {
@@ -723,11 +786,13 @@ export class T3Client {
         }
         this.setMessages(normalizeMessages(detail.messages), threadId || undefined)
         this.setActivities(normalizeActivities((detail.activities as unknown[]) ?? []))
+        this.resolveSnapshotWaiters()
         return
       }
       this.rawProjects = (snapshot.projects as Array<Record<string, unknown>>) ?? []
       this.rawThreads = (snapshot.threads as Array<Record<string, unknown>>) ?? []
       this.publishThreads()
+      this.resolveSnapshotWaiters()
       return
     }
     if (kind === 'event') {
@@ -765,7 +830,7 @@ export class T3Client {
       const id = String(thread.id ?? '')
       if (!id) return
       const idx = this.rawThreads.findIndex((t) => String(t.id) === id)
-      if (idx >= 0) this.rawThreads[idx] = thread
+      if (idx >= 0) this.rawThreads[idx] = mergeDefined(this.rawThreads[idx], thread)
       else this.rawThreads.push(thread)
       this.publishThreads()
       return
@@ -778,12 +843,74 @@ export class T3Client {
     }
   }
 
-  private subscribeShell() {
+  private interruptRequest(requestId: string | null) {
+    if (!requestId || this.ws?.readyState !== WebSocket.OPEN) return
+    this.ws.send(
+      JSON.stringify({
+        _tag: 'Interrupt',
+        requestId,
+      }),
+    )
+  }
+
+  private resolveSnapshotWaiters() {
+    if (this.snapshotWaiters.size === 0) return
+    const waiters = [...this.snapshotWaiters]
+    this.snapshotWaiters.clear()
+    for (const resolve of waiters) resolve()
+  }
+
+  private waitForSnapshot(timeoutMs: number) {
+    return new Promise<void>((resolve) => {
+      const finish = () => {
+        this.snapshotWaiters.delete(finish)
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(finish, timeoutMs)
+      this.snapshotWaiters.add(finish)
+    })
+  }
+
+  private onStreamExit(requestId: string) {
+    if (!requestId) return
+    if (requestId === this.shellRequestId) {
+      this.shellRequestId = null
+      if (this.ws?.readyState === WebSocket.OPEN && this.connection === 'online') {
+        this.subscribeShell({ force: true })
+      }
+      return
+    }
+    if (requestId === this.threadRequestId) {
+      const openId = this.openThreadId
+      this.threadRequestId = null
+      if (openId && this.ws?.readyState === WebSocket.OPEN && this.connection === 'online') {
+        this.openThread(openId)
+      }
+    }
+  }
+
+  private startShellPoll() {
+    if (this.pollTimer) clearInterval(this.pollTimer)
+    this.pollTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+      if (this.connection !== 'online') return
+      this.subscribeShell()
+    }, 4000)
+  }
+
+  private subscribeShell(opts?: { force?: boolean }) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    const now = Date.now()
+    if (!opts?.force && now - this.lastShellSubscribeAt < 1500) return
+    this.lastShellSubscribeAt = now
+    this.interruptRequest(this.shellRequestId)
+    const id = uuid()
+    this.shellRequestId = id
     this.ws.send(
       JSON.stringify({
         _tag: 'Request',
-        id: uuid(),
+        id,
         tag: 'orchestration.subscribeShell',
         payload: {},
         headers: [],
@@ -791,8 +918,22 @@ export class T3Client {
     )
   }
 
+  /** Vuelve a pedir a T3 la lista de hilos y, si hay un chat abierto, su conversación. */
+  async refresh() {
+    if (!this.accessToken) return
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      await this.connect({ force: true })
+      return
+    }
+    const openId = this.openThreadId
+    const wait = this.waitForSnapshot(5000)
+    this.subscribeShell({ force: true })
+    if (openId) this.openThread(openId)
+    await wait
+  }
+
   async refreshSnapshot() {
-    this.subscribeShell()
+    await this.refresh()
   }
 
   openThread(threadId: string) {
@@ -874,6 +1015,6 @@ export class T3Client {
       createdAt: new Date().toISOString(),
     }
     await this.request('orchestration.dispatchCommand', command)
-    await this.refreshSnapshot()
+    this.subscribeShell({ force: true })
   }
 }

@@ -114,6 +114,19 @@ textarea {
   background: var(--surface-2);
 }
 
+.dock-action {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.dock-row:disabled,
+.dock-row:disabled:hover {
+  opacity: 0.5;
+  cursor: default;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
 .dock-running {
   border-color: var(--accent-border);
 }
@@ -304,6 +317,36 @@ textarea {
   cursor: grab;
 }
 
+.settings-bar {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  -webkit-app-region: no-drag;
+}
+
+.opacity-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.opacity-control input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.opacity-control span {
+  width: 36px;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .header-start {
   display: flex;
   align-items: center;
@@ -369,6 +412,11 @@ textarea {
   color: var(--text);
 }
 
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .icon-btn.active {
   border-color: var(--accent-border);
   color: var(--accent);
@@ -389,6 +437,17 @@ textarea {
   display: block;
 }
 
+.solar-icon.is-spinning svg {
+  animation: forge-spin 0.8s linear infinite;
+}
+
+@keyframes forge-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+}
+
 .btn-with-icon {
   display: inline-flex;
   align-items: center;
@@ -397,17 +456,39 @@ textarea {
 
 /* ── Status row ── */
 
-.status-row {
+.status-row-end {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 8px 14px;
+  min-width: 0;
+}
+
+.refresh-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.refresh-text-btn:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.refresh-text-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .hud-badge {

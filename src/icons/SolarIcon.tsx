@@ -9,6 +9,8 @@ import dangerTriangle from './solar/danger-triangle-linear.svg?raw'
 import hamburgerMenu from './solar/hamburger-menu-linear.svg?raw'
 import infoCircle from './solar/info-circle-linear.svg?raw'
 import plain2 from './solar/plain-2-linear.svg?raw'
+import refresh from './solar/refresh-linear.svg?raw'
+import settings from './solar/settings-linear.svg?raw'
 import shieldCheck from './solar/shield-check-linear.svg?raw'
 import sledgehammer from './solar/sledgehammer-linear.svg?raw'
 import stopCircle from './solar/stop-circle-linear.svg?raw'
@@ -18,6 +20,8 @@ const sprites = {
   move: hamburgerMenu,
   collapse: altArrowDown,
   send: plain2,
+  refresh,
+  settings,
   stop: stopCircle,
   tool: sledgehammer,
   approval: shieldCheck,

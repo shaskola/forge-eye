@@ -18,6 +18,8 @@ declare global {
       getSession: () => Promise<{ accessToken: string; httpBase: string } | null>
       setSession: (session: { accessToken: string; httpBase: string }) => Promise<boolean>
       clearSession: () => Promise<boolean>
+      getSettings: () => Promise<{ opacity: number }>
+      setSettings: (settings: { opacity?: number }) => Promise<{ opacity: number }>
     }
   }
 }

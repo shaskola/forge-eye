@@ -4,6 +4,16 @@ Overlay de escritorio para ver y hablar con tus agentes de **T3 Code** mientras 
 
 No sustituye a T3. Se conecta a T3 en esta misma máquina, se queda siempre encima del juego y te deja mirar el estado de los hilos o mandar un mensaje corto sin cambiar de ventana.
 
+## Cómo se ve
+
+Lista de agentes sobre el juego:
+
+![Forge Eye mostrando agentes de T3 sobre Warframe](docs/overlay-lista.png)
+
+Chat de un agente, con herramientas y respuesta:
+
+![Forge Eye con el chat de un agente sobre Warframe](docs/overlay-chat.png)
+
 ## Si no programas: descargar el EXE
 
 1. Abre [Releases](https://github.com/shaskola/forge-eye/releases).
@@ -21,14 +31,17 @@ El juego tiene que estar en **ventana sin bordes** (borderless). Pantalla comple
 
 | Acción | Teclas |
 |--------|--------|
+| Ocultar / mostrar todo | `Ctrl+Shift+H` |
 | Mostrar / ocultar panel | `Ctrl+Shift+A` |
+| Pulsar el overlay (o devolver clics al juego) | `Ctrl+Shift+C` |
 | Modo mover (arrastrar la ventana) | `Ctrl+Shift+D` |
-| Clics al juego (el overlay deja pasar el mouse) | `Ctrl+Shift+C` |
 | Traer el overlay al frente | `Ctrl+Shift+F` |
 | Enviar mensaje | `Enter` |
 | Nueva línea en el mensaje | `Shift+Enter` |
 
 Posición inicial: esquina inferior izquierda. Icono en la bandeja del sistema para mostrar el panel o salir.
+
+La opacidad se ajusta en el engranaje de **Ajustes** (queda guardada). Por defecto el overlay deja pasar los clics al juego; `Ctrl+Shift+C` lo hace pulsable.
 
 ### Qué vas a ver
 

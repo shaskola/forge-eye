@@ -11,6 +11,10 @@ export type ForgeState = {
   clickThrough: boolean
 }
 
+export type ForgeSettings = {
+  opacity: number
+}
+
 export type ForgeBridge = {
   getState: () => Promise<ForgeState>
   setExpanded: (expanded: boolean) => void
@@ -25,6 +29,8 @@ export type ForgeBridge = {
   getSession: () => Promise<ForgeSession | null>
   setSession: (session: ForgeSession) => Promise<boolean>
   clearSession: () => Promise<boolean>
+  getSettings: () => Promise<ForgeSettings>
+  setSettings: (settings: Partial<ForgeSettings>) => Promise<ForgeSettings>
 }
 
 const bridge: ForgeBridge = {
@@ -53,6 +59,8 @@ const bridge: ForgeBridge = {
   getSession: () => ipcRenderer.invoke('forge:get-session'),
   setSession: (session) => ipcRenderer.invoke('forge:set-session', session),
   clearSession: () => ipcRenderer.invoke('forge:clear-session'),
+  getSettings: () => ipcRenderer.invoke('forge:get-settings'),
+  setSettings: (settings) => ipcRenderer.invoke('forge:set-settings', settings),
 }
 
 contextBridge.exposeInMainWorld('forge', bridge)

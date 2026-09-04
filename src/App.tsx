@@ -10,6 +10,31 @@ const statusLabel: Record<string, string> = {
   unknown: '—',
 }
 
+function RefreshButton({
+  busy,
+  disabled,
+  onClick,
+  label,
+}: {
+  busy: boolean
+  disabled: boolean
+  onClick: () => void
+  label?: string
+}) {
+  return (
+    <button
+      className={label ? 'dock-row dock-action' : 'icon-btn'}
+      type="button"
+      title="Actualizar hilos y chat"
+      disabled={disabled || busy}
+      onClick={onClick}
+    >
+      <SolarIcon name="refresh" size={16} className={busy ? 'is-spinning' : undefined} />
+      {label ? <span className="strip-name">{busy ? 'Actualizando…' : label}</span> : null}
+    </button>
+  )
+}
+
 function formatElapsed(startedAt: string | null | undefined, now: number): string | null {
   if (!startedAt) return null
   const elapsed = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000))
@@ -45,10 +70,56 @@ const connectionLabel: Record<ConnectionState, string> = {
   error: 'error de enlace',
 }
 
+const STORAGE_OPACITY = 'forge-eye.opacity'
+const DEFAULT_OPACITY = 0.7
+
+function clampOpacity(n: number) {
+  if (!Number.isFinite(n)) return DEFAULT_OPACITY
+  return Math.min(1, Math.max(0.25, Math.round(n * 100) / 100))
+}
+
+function applyOpacityCss(value: number) {
+  document.documentElement.style.setProperty('--overlay-opacity', String(value))
+}
+
+function useOpacity() {
+  const [opacity, setOpacity] = useState(DEFAULT_OPACITY)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const stored = Number(localStorage.getItem(STORAGE_OPACITY))
+      let next = clampOpacity(stored)
+      try {
+        const disk = await window.forge?.getSettings()
+        if (disk && Number.isFinite(disk.opacity)) next = clampOpacity(disk.opacity)
+      } catch {
+        // sin Electron, usar localStorage
+      }
+      if (cancelled) return
+      setOpacity(next)
+      applyOpacityCss(next)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function setAndPersist(raw: number) {
+    const next = clampOpacity(raw)
+    setOpacity(next)
+    applyOpacityCss(next)
+    localStorage.setItem(STORAGE_OPACITY, String(next))
+    void window.forge?.setSettings({ opacity: next })
+  }
+
+  return { opacity, setOpacity: setAndPersist }
+}
+
 function useForgeWindow() {
   const [expanded, setExpanded] = useState(true)
   const [dragMode, setDragMode] = useState(false)
-  const [clickThrough, setClickThrough] = useState(false)
+  const [clickThrough, setClickThrough] = useState(true)
 
   useEffect(() => {
     const api = window.forge
@@ -111,6 +182,9 @@ export function App() {
   const [sendError, setSendError] = useState('')
   const [pairInput, setPairInput] = useState('')
   const [pairBusy, setPairBusy] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const { opacity, setOpacity } = useOpacity()
 
   const threads = client.threads
   const connection = client.connection
@@ -118,12 +192,14 @@ export function App() {
     () => threads.filter((t) => t.status === 'running').length,
     [threads],
   )
-  const now = useNow(runningCount > 0)
+  const now = useNow(runningCount > 0 || refreshing)
+  const canRefresh = client.hasCredential() && connection !== 'needs_pair'
+  const extraDockRows = canRefresh ? 1 : 0
   const dockRows = Math.max(
     1,
     !client.hasCredential() || connection === 'offline' || connection === 'error'
-      ? 1
-      : threads.length || 1,
+      ? 1 + extraDockRows
+      : (threads.length || 1) + extraDockRows,
   )
 
   useEffect(() => {
@@ -161,6 +237,19 @@ export function App() {
     setSendError('')
     setOpenId(null)
     client.closeThread()
+  }
+
+  async function onRefresh() {
+    if (refreshing || !canRefresh) return
+    setRefreshing(true)
+    setSendError('')
+    try {
+      await client.refresh()
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'No se pudo actualizar')
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   async function onSend() {
@@ -261,6 +350,14 @@ export function App() {
               {row.time ? <span className="strip-time">{row.time}</span> : null}
             </button>
           ))}
+          {canRefresh ? (
+            <RefreshButton
+              busy={refreshing}
+              disabled={connection === 'connecting'}
+              onClick={() => void onRefresh()}
+              label="Actualizar"
+            />
+          ) : null}
         </div>
       </div>
     )
@@ -293,6 +390,21 @@ export function App() {
             </div>
           </div>
           <div className="header-actions">
+            {canRefresh ? (
+              <RefreshButton
+                busy={refreshing}
+                disabled={connection === 'connecting'}
+                onClick={() => void onRefresh()}
+              />
+            ) : null}
+            <button
+              className={`icon-btn ${settingsOpen ? 'active' : ''}`}
+              type="button"
+              title="Ajustes"
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              <SolarIcon name="settings" size={16} />
+            </button>
             <button
               className={`icon-btn ${forge.dragMode ? 'active' : ''}`}
               type="button"
@@ -307,14 +419,50 @@ export function App() {
           </div>
         </header>
 
+        {settingsOpen ? (
+          <div className="settings-bar">
+            <label className="opacity-control" htmlFor="overlay-opacity">
+              Opacidad
+              <input
+                id="overlay-opacity"
+                type="range"
+                min={25}
+                max={100}
+                step={1}
+                value={Math.round(opacity * 100)}
+                onChange={(e) => setOpacity(Number(e.target.value) / 100)}
+              />
+              <span>{Math.round(opacity * 100)}%</span>
+            </label>
+          </div>
+        ) : null}
+
         <div className="status-row">
           <span className="hud-badge">
             <span className={`dot ${connection}`} />
             {connectionLabel[connection]}
           </span>
-          <span className="status-count">
-            {forge.clickThrough ? 'clics al juego' : `${runningCount} activos`}
-          </span>
+          <div className="status-row-end">
+            <span className="status-count">
+              {forge.clickThrough
+                ? 'clics al juego'
+                : forge.dragMode
+                  ? 'mueve el panel'
+                  : `${runningCount} activos · overlay`}
+            </span>
+            {canRefresh ? (
+              <button
+                className="refresh-text-btn"
+                type="button"
+                title="Actualizar hilos y chat"
+                disabled={refreshing || connection === 'connecting'}
+                onClick={() => void onRefresh()}
+              >
+                <SolarIcon name="refresh" size={14} className={refreshing ? 'is-spinning' : undefined} />
+                {refreshing ? 'Actualizando…' : 'Actualizar'}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {!client.hasCredential() ? (
@@ -454,10 +602,13 @@ export function App() {
 
         <div className="footer-keys">
           <span>
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> ocultar
+          </span>
+          <span>
             <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> panel
           </span>
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> clics
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> pulsar overlay
           </span>
           <span>
             <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> mover

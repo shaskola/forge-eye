@@ -49,22 +49,53 @@ function clearSessionFile() {
   }
 }
 
+type StoredSettings = {
+  opacity: number
+}
+
+const DEFAULT_OPACITY = 0.7
+
+function clampOpacity(n: number) {
+  if (!Number.isFinite(n)) return DEFAULT_OPACITY
+  return Math.min(1, Math.max(0.25, Math.round(n * 100) / 100))
+}
+
+function settingsPath() {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
+function readSettings(): StoredSettings {
+  try {
+    const raw = fs.readFileSync(settingsPath(), 'utf8')
+    const parsed = JSON.parse(raw) as Partial<StoredSettings>
+    return { opacity: clampOpacity(Number(parsed.opacity)) }
+  } catch {
+    return { opacity: DEFAULT_OPACITY }
+  }
+}
+
+function writeSettings(settings: StoredSettings) {
+  fs.writeFileSync(settingsPath(), JSON.stringify({ opacity: clampOpacity(settings.opacity) }), 'utf8')
+}
+
 const PANEL_W = 380
 const PANEL_H = 520
 const CHAT_H = Math.round(PANEL_H * 1.5)
 const DOCK_W = 360
 const DOCK_ROW = 40
 const DOCK_PAD = 8
-const DOCK_MAX_ROWS = 8
+const DOCK_MAX_ROWS = 9
 const MARGIN = 24
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let expanded = true
 let dragMode = false
-let clickThrough = false
+/** true = el mouse y los clics van al juego. Solo baja con Ctrl+Shift+C. */
+let clickThrough = true
 let dockRows = 1
 let panelMode: 'list' | 'chat' = 'list'
+let uiHidden = false
 
 function dockHeight(rows: number) {
   const n = Math.max(1, Math.min(DOCK_MAX_ROWS, rows))
@@ -86,7 +117,6 @@ function placeBottomLeft(width: number, height: number) {
 
 function wantsPassthrough(): boolean {
   if (dragMode) return false
-  if (!expanded) return true
   return clickThrough
 }
 
@@ -94,9 +124,9 @@ function applyMousePassthrough(opts?: { focus?: boolean }) {
   if (!win) return
   const ignore = wantsPassthrough()
   if (ignore) {
-    win.blur()
-    win.setIgnoreMouseEvents(true)
+    if (win.isFocused()) win.blur()
     win.setFocusable(false)
+    win.setIgnoreMouseEvents(true, { forward: false })
   } else {
     win.setIgnoreMouseEvents(false)
     win.setFocusable(true)
@@ -124,10 +154,15 @@ function applyBounds(opts?: { focus?: boolean }) {
     ? placeBottomLeft(PANEL_W, panelMode === 'chat' ? CHAT_H : PANEL_H)
     : placeBottomLeft(DOCK_W, dockHeight(dockRows))
   win.setBounds(size, false)
+  if (uiHidden) return
   win.setAlwaysOnTop(true, 'screen-saver')
-  applyMousePassthrough(opts)
-  if (!win.isVisible()) win.show()
+  if (!win.isVisible()) {
+    if (wantsPassthrough()) win.showInactive()
+    else win.show()
+  }
   win.moveTop()
+  // moveTop/show pueden devolver el hit-test en Windows: reaplicar al final.
+  applyMousePassthrough(opts)
 }
 
 function setPanelMode(next: 'list' | 'chat') {
@@ -139,16 +174,38 @@ function publishClickThrough() {
   win?.webContents.send('forge:click-through', clickThrough)
 }
 
-function setExpanded(next: boolean, opts?: { clickThrough?: boolean }) {
+function hideUi() {
+  if (!win || uiHidden) return
+  uiHidden = true
+  dragMode = false
+  clickThrough = true
+  win.webContents.send('forge:drag-mode', false)
+  publishClickThrough()
+  win.hide()
+}
+
+function showUi(opts?: { focus?: boolean }) {
+  if (!win) return
+  uiHidden = false
+  applyBounds(opts)
+}
+
+function toggleUiHidden() {
+  if (!win) return
+  if (uiHidden) showUi({ focus: false })
+  else hideUi()
+}
+
+function setExpanded(next: boolean) {
   if (!win) return
   expanded = next
   if (!expanded) {
     panelMode = 'list'
-    clickThrough = false
-  } else {
-    clickThrough = opts?.clickThrough === true
+    dragMode = false
+    clickThrough = true
+    win.webContents.send('forge:drag-mode', false)
   }
-  applyBounds({ focus: expanded && !clickThrough })
+  applyBounds({ focus: !wantsPassthrough() })
   win.webContents.send('forge:expanded', expanded)
   publishClickThrough()
 }
@@ -157,47 +214,47 @@ function toggleExpanded() {
   setExpanded(!expanded)
 }
 
-function reveal() {
+function reveal(opts?: { interactive?: boolean }) {
   if (!win) return
-  if (!expanded) setExpanded(true)
-  else if (clickThrough) {
+  uiHidden = false
+  if (!expanded) expanded = true
+  if (opts?.interactive) {
+    dragMode = false
     clickThrough = false
-    applyMousePassthrough({ focus: true })
-    publishClickThrough()
+    win.webContents.send('forge:drag-mode', false)
   }
-  win.show()
-  win.setAlwaysOnTop(true, 'screen-saver')
-  win.moveTop()
-  if (!wantsPassthrough()) win.focus()
+  applyBounds({ focus: !wantsPassthrough() })
+  win.webContents.send('forge:expanded', expanded)
+  publishClickThrough()
 }
 
 function setDragMode(next: boolean) {
   if (!win) return
+  uiHidden = false
   dragMode = next
-  if (dragMode && clickThrough) {
+  if (dragMode) {
     clickThrough = false
-    publishClickThrough()
+    if (!expanded) expanded = true
+  } else {
+    clickThrough = true
   }
-  if (dragMode && !expanded) {
-    setExpanded(true)
-    return
-  }
-  applyMousePassthrough({ focus: dragMode || !clickThrough })
+  applyBounds({ focus: dragMode })
+  win.webContents.send('forge:expanded', expanded)
   win.webContents.send('forge:drag-mode', dragMode)
+  publishClickThrough()
 }
 
 function toggleClickThrough() {
   if (!win) return
+  uiHidden = false
   if (dragMode) {
     dragMode = false
     win.webContents.send('forge:drag-mode', false)
   }
-  if (!expanded) {
-    setExpanded(true, { clickThrough: true })
-    return
-  }
   clickThrough = !clickThrough
-  applyMousePassthrough({ focus: !clickThrough })
+  if (!clickThrough && !expanded) expanded = true
+  applyBounds({ focus: !clickThrough })
+  win.webContents.send('forge:expanded', expanded)
   publishClickThrough()
 }
 
@@ -211,10 +268,10 @@ function createWindow() {
     resizable: false,
     maximizable: false,
     fullscreenable: false,
-    skipTaskbar: false,
+    skipTaskbar: true,
     hasShadow: false,
     alwaysOnTop: true,
-    focusable: true,
+    focusable: false,
     thickFrame: false,
     backgroundColor: '#00000000',
     webPreferences: {
@@ -236,10 +293,15 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     if (!win) return
-    win.show()
+    if (wantsPassthrough()) win.showInactive()
+    else win.show()
     win.moveTop()
     applyMousePassthrough({ focus: !wantsPassthrough() })
     console.log('[forge-eye] bounds', win.getBounds())
+  })
+
+  win.on('focus', () => {
+    if (wantsPassthrough()) applyMousePassthrough()
   })
 
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
@@ -262,11 +324,15 @@ function createTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: 'Mostrar panel',
+        label: 'Mostrar panel (sigue el juego; Ctrl+Shift+C para pulsar)',
         click: () => reveal(),
       },
       {
-        label: 'Mostrar / ocultar (Ctrl+Shift+A)',
+        label: 'Ocultar / mostrar (Ctrl+Shift+H)',
+        click: () => toggleUiHidden(),
+      },
+      {
+        label: 'Mostrar / ocultar panel (Ctrl+Shift+A)',
         click: () => toggleExpanded(),
       },
       {
@@ -274,7 +340,7 @@ function createTray() {
         click: () => setDragMode(!dragMode),
       },
       {
-        label: 'Clics al juego (Ctrl+Shift+C)',
+        label: 'Pulsar overlay / clics al juego (Ctrl+Shift+C)',
         click: () => toggleClickThrough(),
       },
       { type: 'separator' },
@@ -286,11 +352,19 @@ function createTray() {
       },
     ]),
   )
-  tray.on('click', () => reveal())
+  tray.on('click', () => reveal({ interactive: true }))
 }
 
 function registerShortcuts() {
+  globalShortcut.register('CommandOrControl+Shift+H', () => {
+    toggleUiHidden()
+  })
   globalShortcut.register('CommandOrControl+Shift+A', () => {
+    if (uiHidden) {
+      uiHidden = false
+      setExpanded(true)
+      return
+    }
     toggleExpanded()
   })
   globalShortcut.register('CommandOrControl+Shift+D', () => {
@@ -336,6 +410,15 @@ app.whenReady().then(() => {
     return true
   })
 
+  ipcMain.handle('forge:get-settings', () => readSettings())
+
+  ipcMain.handle('forge:set-settings', (_e, patch: Partial<StoredSettings>) => {
+    const current = readSettings()
+    const next = { opacity: clampOpacity(Number(patch?.opacity ?? current.opacity)) }
+    writeSettings(next)
+    return next
+  })
+
   ipcMain.on('forge:set-dock-rows', (_e, next: number) => {
     setDockRows(Number(next))
   })
@@ -353,23 +436,17 @@ app.whenReady().then(() => {
   })
 
   ipcMain.on('forge:set-click-through', (_e, next: boolean) => {
-    if (Boolean(next) === clickThrough && expanded) return
-    if (Boolean(next)) {
-      if (!expanded) setExpanded(true, { clickThrough: true })
-      else {
-        clickThrough = true
-        applyMousePassthrough()
-        publishClickThrough()
-      }
-    } else {
-      clickThrough = false
-      applyMousePassthrough({ focus: true })
-      publishClickThrough()
-    }
+    clickThrough = Boolean(next)
+    if (!clickThrough && !expanded) expanded = true
+    if (clickThrough) dragMode = false
+    applyBounds({ focus: !clickThrough })
+    win?.webContents.send('forge:expanded', expanded)
+    win?.webContents.send('forge:drag-mode', dragMode)
+    publishClickThrough()
   })
 
   ipcMain.on('forge:focus', () => {
-    reveal()
+    reveal({ interactive: true })
   })
 
   ipcMain.on('forge:reveal', () => {
