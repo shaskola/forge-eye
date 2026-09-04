@@ -13,6 +13,7 @@ export type ForgeState = {
 
 export type ForgeSettings = {
   opacity: number
+  locale: 'en' | 'es'
 }
 
 export type ForgeBridge = {

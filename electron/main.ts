@@ -10,6 +10,7 @@ import {
 } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { DEFAULT_LOCALE, parseLocale, translate, type Locale } from '../src/i18n/catalog'
 
 type StoredSession = {
   accessToken: string
@@ -51,6 +52,7 @@ function clearSessionFile() {
 
 type StoredSettings = {
   opacity: number
+  locale: Locale
 }
 
 const DEFAULT_OPACITY = 0.7
@@ -68,14 +70,24 @@ function readSettings(): StoredSettings {
   try {
     const raw = fs.readFileSync(settingsPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<StoredSettings>
-    return { opacity: clampOpacity(Number(parsed.opacity)) }
+    return {
+      opacity: clampOpacity(Number(parsed.opacity)),
+      locale: parseLocale(parsed.locale),
+    }
   } catch {
-    return { opacity: DEFAULT_OPACITY }
+    return { opacity: DEFAULT_OPACITY, locale: DEFAULT_LOCALE }
   }
 }
 
 function writeSettings(settings: StoredSettings) {
-  fs.writeFileSync(settingsPath(), JSON.stringify({ opacity: clampOpacity(settings.opacity) }), 'utf8')
+  fs.writeFileSync(
+    settingsPath(),
+    JSON.stringify({
+      opacity: clampOpacity(settings.opacity),
+      locale: parseLocale(settings.locale),
+    }),
+    'utf8',
+  )
 }
 
 const PANEL_W = 380
@@ -96,6 +108,7 @@ let clickThrough = true
 let dockRows = 1
 let panelMode: 'list' | 'chat' = 'list'
 let uiHidden = false
+let currentLocale: Locale = DEFAULT_LOCALE
 
 function dockHeight(rows: number) {
   const n = Math.max(1, Math.min(DOCK_MAX_ROWS, rows))
@@ -313,6 +326,42 @@ function createWindow() {
   })
 }
 
+function applyTrayMenu() {
+  if (!tray) return
+  const t = (key: Parameters<typeof translate>[1]) => translate(currentLocale, key)
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: t('trayShow'),
+        click: () => reveal(),
+      },
+      {
+        label: t('trayHide'),
+        click: () => toggleUiHidden(),
+      },
+      {
+        label: t('trayPanel'),
+        click: () => toggleExpanded(),
+      },
+      {
+        label: t('trayMove'),
+        click: () => setDragMode(!dragMode),
+      },
+      {
+        label: t('trayClick'),
+        click: () => toggleClickThrough(),
+      },
+      { type: 'separator' },
+      {
+        label: t('trayQuit'),
+        click: () => {
+          app.quit()
+        },
+      },
+    ]),
+  )
+}
+
 function createTray() {
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAOklEQVQ4T2NkYGD4z0ABYBzVMKoBBgYGBv+/DAwMjP8ZGBhGNYxqGPgG/P8PMkBq1KgGBgYGhv8MDAwA3h8EAZ6xV24AAAAASUVORK5CYII=',
@@ -321,37 +370,7 @@ function createTray() {
   const icon = nativeImage.createFromBuffer(png)
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
   tray.setToolTip('Forge Eye')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: 'Mostrar panel (sigue el juego; Ctrl+Shift+C para pulsar)',
-        click: () => reveal(),
-      },
-      {
-        label: 'Ocultar / mostrar (Ctrl+Shift+H)',
-        click: () => toggleUiHidden(),
-      },
-      {
-        label: 'Mostrar / ocultar panel (Ctrl+Shift+A)',
-        click: () => toggleExpanded(),
-      },
-      {
-        label: 'Modo mover (Ctrl+Shift+D)',
-        click: () => setDragMode(!dragMode),
-      },
-      {
-        label: 'Pulsar overlay / clics al juego (Ctrl+Shift+C)',
-        click: () => toggleClickThrough(),
-      },
-      { type: 'separator' },
-      {
-        label: 'Salir',
-        click: () => {
-          app.quit()
-        },
-      },
-    ]),
-  )
+  applyTrayMenu()
   tray.on('click', () => reveal({ interactive: true }))
 }
 
@@ -379,6 +398,7 @@ function registerShortcuts() {
 }
 
 app.whenReady().then(() => {
+  currentLocale = readSettings().locale
   createWindow()
   createTray()
   registerShortcuts()
@@ -393,7 +413,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('forge:set-session', (_e, session: StoredSession) => {
     if (!session?.accessToken || typeof session.accessToken !== 'string') {
-      throw new Error('Sesión inválida')
+      throw new Error(translate(currentLocale, 'noSession'))
     }
     writeSession({
       accessToken: session.accessToken,
@@ -414,8 +434,15 @@ app.whenReady().then(() => {
 
   ipcMain.handle('forge:set-settings', (_e, patch: Partial<StoredSettings>) => {
     const current = readSettings()
-    const next = { opacity: clampOpacity(Number(patch?.opacity ?? current.opacity)) }
+    const next: StoredSettings = {
+      opacity: clampOpacity(Number(patch?.opacity ?? current.opacity)),
+      locale: parseLocale(patch?.locale ?? current.locale),
+    }
     writeSettings(next)
+    if (next.locale !== currentLocale) {
+      currentLocale = next.locale
+      applyTrayMenu()
+    }
     return next
   })
 

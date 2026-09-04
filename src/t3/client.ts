@@ -1,16 +1,5 @@
-export type AgentStatus = 'idle' | 'running' | 'error' | 'unknown'
-
-export type AgentThread = {
-  id: string
-  projectId: string
-  projectTitle: string
-  title: string
-  status: AgentStatus
-  lastLine: string
-  startedAt?: string | null
-  pendingApproval?: boolean
-}
-
+import { AppError } from '../i18n/errors'
+import type { MsgKey, TranslateVars } from '../i18n/catalog'
 import {
   collapseActivities,
   normalizeActivities,
@@ -20,6 +9,21 @@ import {
 } from './activity'
 
 export type { ThreadActivity } from './activity'
+
+export type AgentStatus = 'idle' | 'running' | 'error' | 'unknown'
+export type LastLineKey = 'lineMonitoring' | 'lineWorking' | 'lineTurnCompleted' | 'lineNoActivity'
+
+export type AgentThread = {
+  id: string
+  projectId: string
+  projectTitle: string
+  title: string
+  status: AgentStatus
+  lastLine: string
+  lastLineKey?: LastLineKey
+  startedAt?: string | null
+  pendingApproval?: boolean
+}
 
 export type ChatMessage = {
   id: string
@@ -68,7 +72,7 @@ function toWsUrl(httpBase: string, ticket: string) {
 function normalizeHttpBase(raw: string) {
   const u = new URL(raw)
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-    throw new Error('El host de pairing debe ser http(s)')
+    throw new AppError('pairHost')
   }
   return `${u.protocol}//${u.host}`
 }
@@ -81,7 +85,7 @@ export type PairingTarget = {
 /** Extrae token + host de un enlace de pairing, o token plano + localhost. */
 export function parsePairingInput(input: string): PairingTarget {
   const raw = input.trim()
-  if (!raw) throw new Error('Pega un enlace o token de pairing de T3')
+  if (!raw) throw new AppError('pairEmpty')
 
   if (raw.includes('://') || raw.includes('#') || raw.startsWith('/')) {
     const url = new URL(raw, DEFAULT_HTTP_BASE)
@@ -94,7 +98,7 @@ export function parsePairingInput(input: string): PairingTarget {
       url.searchParams.get('credential') ??
       ''
     ).trim()
-    if (!credential) throw new Error('El enlace no trae token (#token=…)')
+    if (!credential) throw new AppError('pairNoToken')
     const hostedHost = url.searchParams.get('host')
     const httpBase = hostedHost
       ? normalizeHttpBase(hostedHost.includes('://') ? hostedHost : `http://${hostedHost}`)
@@ -107,17 +111,11 @@ export function parsePairingInput(input: string): PairingTarget {
 
 function formatAuthError(status: number, json: Record<string, unknown>) {
   const reason = String(json.reason ?? json.error_description ?? json.message ?? json.error ?? '')
-  if (reason === 'scope_not_granted') {
-    return 'El enlace no otorga esos permisos. Crea un Create Link nuevo e inténtalo otra vez.'
-  }
-  if (reason === 'invalid_credential') {
-    return 'Token inválido o ya usado. En T3: Create Link de nuevo y pégalo aquí.'
-  }
-  if (reason === 'invalid_scope') {
-    return 'Scopes inválidos en la petición de pairing.'
-  }
-  if (reason) return `${reason} (${status})`
-  return `Pairing falló (${status})`
+  if (reason === 'scope_not_granted') return new AppError('pairScopeNotGranted')
+  if (reason === 'invalid_credential') return new AppError('pairInvalidCredential')
+  if (reason === 'invalid_scope') return new AppError('pairInvalidScope')
+  if (reason) return new AppError('pairReason', { reason, status })
+  return new AppError('pairFailed', { status })
 }
 
 /** Mismo criterio de T3: pending / sesión viva / override active = abierto. */
@@ -179,7 +177,7 @@ function normalizeSnapshot(snapshot: SnapshotLike): AgentThread[] {
   for (const p of snapshot.projects ?? []) {
     const id = String(p.id ?? p.projectId ?? '')
     if (!id) continue
-    projects.set(id, String(p.title ?? p.name ?? 'Proyecto'))
+    projects.set(id, String(p.title ?? p.name ?? ''))
   }
 
   const out: AgentThread[] = []
@@ -196,24 +194,28 @@ function normalizeSnapshot(snapshot: SnapshotLike): AgentThread[] {
     const background = String(t.backgroundLiveness ?? '')
     const status = resolveAgentStatus(t)
 
-    const lastLine =
-      String(planProgress?.step ?? '').trim() ||
-      String(session.lastError ?? '').trim() ||
-      (status === 'running'
-        ? background === 'monitoring'
-          ? 'Monitoreando…'
-          : 'Trabajando…'
-        : turnState === 'completed'
-          ? 'Turno completado'
-          : 'Sin actividad reciente')
+    const planLine = String(planProgress?.step ?? '').trim()
+    const sessionError = String(session.lastError ?? '').trim()
+    let lastLine = planLine || sessionError
+    let lastLineKey: LastLineKey | undefined
+    if (!lastLine) {
+      if (status === 'running') {
+        lastLineKey = background === 'monitoring' ? 'lineMonitoring' : 'lineWorking'
+      } else if (turnState === 'completed') {
+        lastLineKey = 'lineTurnCompleted'
+      } else {
+        lastLineKey = 'lineNoActivity'
+      }
+    }
 
     out.push({
       id,
       projectId,
-      projectTitle: projects.get(projectId) ?? 'Proyecto',
-      title: String(t.title ?? 'Hilo'),
+      projectTitle: projects.get(projectId) ?? '',
+      title: String(t.title ?? ''),
       status,
       lastLine: lastLine.slice(0, 160),
+      lastLineKey,
       startedAt: status === 'running' ? resolveStartedAt(t) : null,
       pendingApproval: Boolean(t.hasPendingApprovals ?? t.pendingApproval),
     })
@@ -323,8 +325,34 @@ export class T3Client {
   activities: ThreadActivity[] = []
   openThreadId: string | null = null
   chatLoading = false
-  lastError = ''
+  lastErrorKey = ''
+  lastErrorParams: TranslateVars = {}
+  lastErrorRaw = ''
   ready = false
+
+  get lastError() {
+    return this.lastErrorKey || this.lastErrorRaw
+  }
+
+  private clearLastError() {
+    this.lastErrorKey = ''
+    this.lastErrorParams = {}
+    this.lastErrorRaw = ''
+  }
+
+  private assignError(err: unknown, fallback: MsgKey) {
+    this.clearLastError()
+    if (err instanceof AppError) {
+      this.lastErrorKey = err.key
+      this.lastErrorParams = err.params
+      return
+    }
+    if (err instanceof Error && err.message) {
+      this.lastErrorRaw = err.message
+      return
+    }
+    this.lastErrorKey = fallback
+  }
 
   constructor() {
     this.accessToken = localStorage.getItem(STORAGE_TOKEN)
@@ -386,7 +414,7 @@ export class T3Client {
     this.ws?.close()
     this.connection = 'needs_pair'
     this.threads = []
-    this.lastError = ''
+    this.clearLastError()
     this.emit()
   }
 
@@ -412,20 +440,20 @@ export class T3Client {
     })
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
     if (!res.ok || typeof json.access_token !== 'string') {
-      throw new Error(formatAuthError(res.status, json))
+      throw formatAuthError(res.status, json)
     }
 
     this.accessToken = json.access_token
     this.httpBase = httpBase
     await this.persistSession()
-    this.lastError = ''
+    this.clearLastError()
     this.connection = 'connecting'
     this.emit()
     await this.connect()
   }
 
   private async mintWsTicket(): Promise<string> {
-    if (!this.accessToken) throw new Error('Sin sesión T3')
+    if (!this.accessToken) throw new AppError('noSession')
     const res = await fetch(`${this.httpBase}/api/auth/websocket-ticket`, {
       method: 'POST',
       headers: {
@@ -443,11 +471,12 @@ export class T3Client {
       // No borrar la sesión automáticamente: T3 puede listar el cliente aunque
       // el ticket falle un momento. El usuario desempareja a mano si hace falta.
       if (res.status === 401) {
-        throw new Error(
-          'T3 rechazó la sesión (401). En Connections, Revoke del cliente viejo, Create Link nuevo y vuelve a Emparejar.',
-        )
+        throw new AppError('sessionRejected')
       }
-      throw new Error(json.message ?? json.reason ?? `Ticket WS falló (${res.status})`)
+      if (json.message || json.reason) {
+        throw new Error(String(json.message ?? json.reason))
+      }
+      throw new AppError('wsTicketFailed', { status: res.status })
     }
     return json.ticket
   }
@@ -478,7 +507,7 @@ export class T3Client {
       if (generation !== this.connectGen) return
       this.connecting = false
       this.connection = this.accessToken ? 'error' : 'needs_pair'
-      this.lastError = err instanceof Error ? err.message : 'No se pudo abrir WebSocket'
+      this.assignError(err, 'wsOpenFailed')
       this.emit()
       this.scheduleReconnect()
       return
@@ -487,7 +516,9 @@ export class T3Client {
     this.handshakeTimer = setTimeout(() => {
       if (generation !== this.connectGen) return
       if (this.ws?.readyState === WebSocket.OPEN) return
-      this.lastError = 'T3 no respondió al WebSocket. Pulsa Reconectar.'
+      this.lastErrorKey = 'wsNoResponse'
+      this.lastErrorParams = {}
+      this.lastErrorRaw = ''
       this.connection = 'error'
       this.connecting = false
       this.emit()
@@ -502,7 +533,7 @@ export class T3Client {
       }
       this.connecting = false
       this.connection = 'online'
-      this.lastError = ''
+      this.clearLastError()
       this.emit()
       this.subscribeShell({ force: true })
       this.startShellPoll()
@@ -515,7 +546,9 @@ export class T3Client {
     this.ws.onerror = () => {
       if (generation !== this.connectGen) return
       this.connecting = false
-      this.lastError = 'Error de conexión con T3 Code'
+      this.lastErrorKey = 't3ConnectionError'
+      this.lastErrorParams = {}
+      this.lastErrorRaw = ''
       this.connection = 'error'
       this.emit()
     }
@@ -641,29 +674,29 @@ export class T3Client {
         const die = cause.find((c) => c && typeof c === 'object' && (c as { _tag?: string })._tag === 'Die') as
           | { defect?: unknown }
           | undefined
-        const message =
+        const serverMessage =
           fail?.error?.message ??
           (typeof die?.defect === 'string' ? die.defect : null) ??
           fail?.error?._tag ??
-          'Error RPC T3'
-        entry.reject(new Error(message))
+          ''
+        entry.reject(serverMessage ? new Error(serverMessage) : new AppError('rpcError'))
         continue
       }
 
-      entry.reject(new Error('Exit RPC desconocido'))
+      entry.reject(new AppError('rpcUnknownExit'))
     }
   }
 
   private request(tag: string, payload: unknown = {}, timeoutMs = 12000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        reject(new Error('T3 Code no está conectado'))
+        reject(new AppError('t3NotConnected'))
         return
       }
       const id = uuid()
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error('Tiempo de espera agotado'))
+        reject(new AppError('timeout'))
       }, timeoutMs)
       this.pending.set(id, {
         resolve: (v) => {
@@ -715,7 +748,7 @@ export class T3Client {
       }
       return thread
     })
-    this.lastError = ''
+    this.clearLastError()
     this.emit()
   }
 
@@ -976,7 +1009,7 @@ export class T3Client {
 
   async sendMessage(threadId: string, text: string) {
     const trimmed = text.trim()
-    if (!trimmed) throw new Error('Mensaje vacío')
+    if (!trimmed) throw new AppError('emptyMessage')
 
     const command = {
       type: 'thread.turn.start',

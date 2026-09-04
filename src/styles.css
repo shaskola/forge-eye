@@ -318,13 +318,16 @@ textarea {
 }
 
 .settings-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   -webkit-app-region: no-drag;
 }
 
-.opacity-control {
+.settings-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -333,18 +336,39 @@ textarea {
   color: var(--text-secondary);
 }
 
-.opacity-control input[type='range'] {
+.settings-row input[type='range'] {
   flex: 1;
   min-width: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
 
-.opacity-control span {
+.settings-value {
   width: 36px;
   text-align: right;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.locale-toggle {
+  display: flex;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.locale-toggle button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.locale-toggle button.active {
+  background: var(--accent-bg);
+  color: var(--text);
 }
 
 .header-start {
@@ -446,7 +470,6 @@ textarea {
     transform: rotate(360deg);
   }
 }
-}
 
 .btn-with-icon {
   display: inline-flex;
@@ -456,11 +479,23 @@ textarea {
 
 /* ── Status row ── */
 
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .status-row-end {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+  margin-left: auto;
 }
 
 .refresh-text-btn {
@@ -599,7 +634,7 @@ textarea {
 .thread-list {
   flex: 1;
   overflow: auto;
-  padding: 8px 8px 10px;
+  padding: 8px 14px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -727,7 +762,7 @@ textarea {
 .transcript {
   flex: 1;
   overflow: auto;
-  padding: 10px 12px 8px;
+  padding: 10px 14px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;

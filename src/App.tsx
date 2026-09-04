@@ -1,36 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SolarIcon } from './icons/SolarIcon'
+import { useSettings } from './i18n/SettingsContext'
+import { formatStoredError, formatUnknownError } from './i18n/errors'
+import type { MsgKey } from './i18n/catalog'
 import { T3Client, type AgentThread, type ChatMessage, type ConnectionState, type ThreadActivity } from './t3/client'
 import type { ActivityTone } from './t3/activity'
-
-const statusLabel: Record<string, string> = {
-  idle: 'listo',
-  running: 'trabajando',
-  error: 'error',
-  unknown: '—',
-}
 
 function RefreshButton({
   busy,
   disabled,
   onClick,
   label,
+  busyLabel,
+  title,
 }: {
   busy: boolean
   disabled: boolean
   onClick: () => void
   label?: string
+  busyLabel: string
+  title: string
 }) {
   return (
     <button
       className={label ? 'dock-row dock-action' : 'icon-btn'}
       type="button"
-      title="Actualizar hilos y chat"
+      title={title}
       disabled={disabled || busy}
       onClick={onClick}
     >
       <SolarIcon name="refresh" size={16} className={busy ? 'is-spinning' : undefined} />
-      {label ? <span className="strip-name">{busy ? 'Actualizando…' : label}</span> : null}
+      {label ? <span className="strip-name">{busy ? busyLabel : label}</span> : null}
     </button>
   )
 }
@@ -47,11 +47,6 @@ function formatElapsed(startedAt: string | null | undefined, now: number): strin
   return `${seconds}s`
 }
 
-function statusText(thread: Pick<AgentThread, 'status' | 'startedAt'>, now: number): string {
-  if (thread.status !== 'running') return statusLabel[thread.status] ?? statusLabel.unknown
-  return formatElapsed(thread.startedAt, now) ?? 'trabajando'
-}
-
 function useNow(active: boolean) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -60,60 +55,6 @@ function useNow(active: boolean) {
     return () => clearInterval(timer)
   }, [active])
   return now
-}
-
-const connectionLabel: Record<ConnectionState, string> = {
-  needs_pair: 'sin emparejar',
-  connecting: 'conectando…',
-  online: 'T3 en línea',
-  offline: 'T3 offline',
-  error: 'error de enlace',
-}
-
-const STORAGE_OPACITY = 'forge-eye.opacity'
-const DEFAULT_OPACITY = 0.7
-
-function clampOpacity(n: number) {
-  if (!Number.isFinite(n)) return DEFAULT_OPACITY
-  return Math.min(1, Math.max(0.25, Math.round(n * 100) / 100))
-}
-
-function applyOpacityCss(value: number) {
-  document.documentElement.style.setProperty('--overlay-opacity', String(value))
-}
-
-function useOpacity() {
-  const [opacity, setOpacity] = useState(DEFAULT_OPACITY)
-
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      const stored = Number(localStorage.getItem(STORAGE_OPACITY))
-      let next = clampOpacity(stored)
-      try {
-        const disk = await window.forge?.getSettings()
-        if (disk && Number.isFinite(disk.opacity)) next = clampOpacity(disk.opacity)
-      } catch {
-        // sin Electron, usar localStorage
-      }
-      if (cancelled) return
-      setOpacity(next)
-      applyOpacityCss(next)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  function setAndPersist(raw: number) {
-    const next = clampOpacity(raw)
-    setOpacity(next)
-    applyOpacityCss(next)
-    localStorage.setItem(STORAGE_OPACITY, String(next))
-    void window.forge?.setSettings({ opacity: next })
-  }
-
-  return { opacity, setOpacity: setAndPersist }
 }
 
 function useForgeWindow() {
@@ -176,6 +117,7 @@ function useT3() {
 export function App() {
   const forge = useForgeWindow()
   const { client } = useT3()
+  const { t, locale, opacity, setOpacity, setLocale } = useSettings()
   const [openId, setOpenId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -184,12 +126,36 @@ export function App() {
   const [pairBusy, setPairBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const { opacity, setOpacity } = useOpacity()
+
+  const statusLabel = (status: string) => {
+    if (status === 'idle') return t('statusIdle')
+    if (status === 'running') return t('statusRunning')
+    if (status === 'error') return t('statusError')
+    return t('statusUnknown')
+  }
+
+  const connectionLabel = (state: ConnectionState) => {
+    if (state === 'needs_pair') return t('connNeedsPair')
+    if (state === 'connecting') return t('connConnecting')
+    if (state === 'online') return t('connOnline')
+    if (state === 'offline') return t('connOffline')
+    return t('connError')
+  }
+
+  const threadTitle = (thread: Pick<AgentThread, 'title'>) => thread.title || t('fallbackThread')
+  const threadLine = (thread: Pick<AgentThread, 'lastLine' | 'lastLineKey'>) =>
+    thread.lastLine || (thread.lastLineKey ? t(thread.lastLineKey) : '')
+  const statusText = (thread: Pick<AgentThread, 'status' | 'startedAt'>, now: number) => {
+    if (thread.status !== 'running') return statusLabel(thread.status)
+    return formatElapsed(thread.startedAt, now) ?? t('statusRunning')
+  }
+  const fail = (err: unknown, fallback: MsgKey) => formatUnknownError(locale, err, fallback)
+  const storedError = formatStoredError(locale, client.lastErrorKey, client.lastErrorParams, client.lastErrorRaw)
 
   const threads = client.threads
   const connection = client.connection
   const runningCount = useMemo(
-    () => threads.filter((t) => t.status === 'running').length,
+    () => threads.filter((row) => row.status === 'running').length,
     [threads],
   )
   const now = useNow(runningCount > 0 || refreshing)
@@ -207,13 +173,13 @@ export function App() {
   }, [forge.expanded, dockRows])
 
   useEffect(() => {
-    if (openId && !threads.some((t) => t.id === openId)) {
+    if (openId && !threads.some((row) => row.id === openId)) {
       client.closeThread()
       setOpenId(null)
     }
   }, [threads, openId, client])
 
-  const selected = threads.find((t) => t.id === openId) ?? null
+  const selected = threads.find((row) => row.id === openId) ?? null
 
   useEffect(() => {
     if (!forge.expanded) {
@@ -246,7 +212,7 @@ export function App() {
     try {
       await client.refresh()
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'No se pudo actualizar')
+      setSendError(fail(err, 'errorRefresh'))
     } finally {
       setRefreshing(false)
     }
@@ -260,7 +226,7 @@ export function App() {
       await client.sendMessage(selected.id, draft)
       setDraft('')
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'No se pudo enviar')
+      setSendError(fail(err, 'errorSend'))
     } finally {
       setBusy(false)
     }
@@ -273,7 +239,7 @@ export function App() {
     try {
       await client.interrupt(selected.id)
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'No se pudo interrumpir')
+      setSendError(fail(err, 'errorInterrupt'))
     } finally {
       setBusy(false)
     }
@@ -286,7 +252,7 @@ export function App() {
       await client.pairWithCredential(pairInput)
       setPairInput('')
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'No se pudo emparejar')
+      setSendError(fail(err, 'errorPair'))
     } finally {
       setPairBusy(false)
     }
@@ -301,31 +267,31 @@ export function App() {
       label: string
       time?: string
     }> = unpaired
-      ? [{ id: 'pair', name: 'Forge Eye', status: 'unknown', label: 'emparejar' }]
+      ? [{ id: 'pair', name: 'Forge Eye', status: 'unknown', label: t('pairDockLabel') }]
       : connection === 'offline' || connection === 'error'
         ? [
             {
               id: 'link',
               name: 'Forge Eye',
               status: 'error',
-              label: client.lastError || 'sin enlace',
+              label: storedError || t('noLink'),
             },
           ]
         : threads.length === 0
           ? [
               {
                 id: 'empty',
-                name: connection === 'connecting' ? 'Conectando…' : 'Forge Eye',
+                name: connection === 'connecting' ? t('connectingName') : 'Forge Eye',
                 status: 'unknown',
-                label: connection === 'connecting' ? '…' : 'sin hilos',
+                label: connection === 'connecting' ? '…' : t('noThreads'),
               },
             ]
-          : threads.map((t) => ({
-              id: t.id,
-              name: t.title,
-              status: t.status,
-              label: statusLabel[t.status] ?? statusLabel.unknown,
-              time: t.status === 'running' ? formatElapsed(t.startedAt, now) ?? '' : '',
+          : threads.map((row) => ({
+              id: row.id,
+              name: threadTitle(row),
+              status: row.status,
+              label: statusLabel(row.status),
+              time: row.status === 'running' ? formatElapsed(row.startedAt, now) ?? '' : '',
             }))
 
     return (
@@ -355,7 +321,9 @@ export function App() {
               busy={refreshing}
               disabled={connection === 'connecting'}
               onClick={() => void onRefresh()}
-              label="Actualizar"
+              label={t('refresh')}
+              busyLabel={t('refreshing')}
+              title={t('refreshTitle')}
             />
           ) : null}
         </div>
@@ -366,26 +334,26 @@ export function App() {
   return (
     <div className="app">
       <section
-          className={`panel ${forge.dragMode ? 'drag-mode' : ''} ${forge.clickThrough ? 'click-through' : ''}`}
-        >
+        className={`panel ${forge.dragMode ? 'drag-mode' : ''} ${forge.clickThrough ? 'click-through' : ''}`}
+      >
         <header className={`header ${forge.dragMode ? 'draggable' : ''}`}>
           <div className="header-start">
             {selected ? (
               <button
                 className="icon-btn"
                 type="button"
-                title="Volver a hilos"
+                title={t('backToThreads')}
                 onClick={backToList}
               >
                 <SolarIcon name="back" size={16} />
               </button>
             ) : null}
             <div className="brand">
-              <h1>{selected ? selected.title : 'Forge Eye'}</h1>
+              <h1>{selected ? threadTitle(selected) : 'Forge Eye'}</h1>
               <p>
                 {selected
-                  ? `${selected.projectTitle} · ${statusText(selected, now)}`
-                  : 'Agentes T3'}
+                  ? `${selected.projectTitle || t('fallbackProject')} · ${statusText(selected, now)}`
+                  : t('brandSubtitle')}
               </p>
             </div>
           </div>
@@ -395,12 +363,14 @@ export function App() {
                 busy={refreshing}
                 disabled={connection === 'connecting'}
                 onClick={() => void onRefresh()}
+                busyLabel={t('refreshing')}
+                title={t('refreshTitle')}
               />
             ) : null}
             <button
               className={`icon-btn ${settingsOpen ? 'active' : ''}`}
               type="button"
-              title="Ajustes"
+              title={t('settings')}
               onClick={() => setSettingsOpen((open) => !open)}
             >
               <SolarIcon name="settings" size={16} />
@@ -408,12 +378,12 @@ export function App() {
             <button
               className={`icon-btn ${forge.dragMode ? 'active' : ''}`}
               type="button"
-              title="Modo mover (Ctrl+Shift+D)"
+              title={t('moveMode')}
               onClick={() => forge.toggleDrag()}
             >
               <SolarIcon name="move" size={16} />
             </button>
-            <button className="icon-btn" type="button" title="Cerrar" onClick={() => forge.close()}>
+            <button className="icon-btn" type="button" title={t('close')} onClick={() => forge.close()}>
               <SolarIcon name="collapse" size={16} />
             </button>
           </div>
@@ -421,8 +391,8 @@ export function App() {
 
         {settingsOpen ? (
           <div className="settings-bar">
-            <label className="opacity-control" htmlFor="overlay-opacity">
-              Opacidad
+            <label className="settings-row" htmlFor="overlay-opacity">
+              {t('opacity')}
               <input
                 id="overlay-opacity"
                 type="range"
@@ -432,34 +402,53 @@ export function App() {
                 value={Math.round(opacity * 100)}
                 onChange={(e) => setOpacity(Number(e.target.value) / 100)}
               />
-              <span>{Math.round(opacity * 100)}%</span>
+              <span className="settings-value">{Math.round(opacity * 100)}%</span>
             </label>
+            <div className="settings-row">
+              {t('language')}
+              <div className="locale-toggle" role="group" aria-label={t('language')}>
+                <button
+                  type="button"
+                  className={locale === 'en' ? 'active' : ''}
+                  onClick={() => setLocale('en')}
+                >
+                  {t('langEnglish')}
+                </button>
+                <button
+                  type="button"
+                  className={locale === 'es' ? 'active' : ''}
+                  onClick={() => setLocale('es')}
+                >
+                  {t('langSpanish')}
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
 
         <div className="status-row">
           <span className="hud-badge">
             <span className={`dot ${connection}`} />
-            {connectionLabel[connection]}
+            {connectionLabel(connection)}
           </span>
           <div className="status-row-end">
             <span className="status-count">
               {forge.clickThrough
-                ? 'clics al juego'
+                ? t('clicksToGame')
                 : forge.dragMode
-                  ? 'mueve el panel'
-                  : `${runningCount} activos · overlay`}
+                  ? t('moveThePanel')
+                  : t('statusCountActive', { count: runningCount })}
             </span>
             {canRefresh ? (
               <button
                 className="refresh-text-btn"
                 type="button"
-                title="Actualizar hilos y chat"
+                title={t('refreshTitle')}
                 disabled={refreshing || connection === 'connecting'}
                 onClick={() => void onRefresh()}
               >
                 <SolarIcon name="refresh" size={14} className={refreshing ? 'is-spinning' : undefined} />
-                {refreshing ? 'Actualizando…' : 'Actualizar'}
+                {refreshing ? t('refreshing') : t('refresh')}
               </button>
             ) : null}
           </div>
@@ -467,16 +456,11 @@ export function App() {
 
         {!client.hasCredential() ? (
           <div className="pair-box">
-            <p className="pair-box-label">Enlace T3</p>
-            <p>
-              En T3 Code: <strong>Settings → Connections → Create Link</strong>. Pega aquí el enlace
-              o el token. Si ya aparece un cliente gris (p. ej. Forge-Desu), haz{' '}
-              <strong>Revoke</strong> y crea un link nuevo: ese listado no significa que Forge Eye
-              esté emparejado.
-            </p>
+            <p className="pair-box-label">{t('pairHeading')}</p>
+            <p>{t('pairBody')}</p>
             <textarea
               value={pairInput}
-              placeholder="http://127.0.0.1:3773/pair#token=… o el token"
+              placeholder={t('pairPlaceholder')}
               onChange={(e) => setPairInput(e.target.value)}
             />
             {sendError ? <div className="error-banner">{sendError}</div> : null}
@@ -486,20 +470,17 @@ export function App() {
               disabled={!pairInput.trim() || pairBusy}
               onClick={() => void onPair()}
             >
-              Emparejar
+              {t('pairButton')}
             </button>
           </div>
         ) : (
           <>
-            {client.lastError ? <div className="error-banner">{client.lastError}</div> : null}
+            {storedError ? <div className="error-banner">{storedError}</div> : null}
 
             {connection !== 'online' ? (
               <div className="pair-box">
-                <p className="pair-box-label">Sesión guardada</p>
-                <p>
-                  Forge Eye ya tiene token, pero el enlace a T3 no está activo (
-                  {connectionLabel[connection]}).
-                </p>
+                <p className="pair-box-label">{t('savedSession')}</p>
+                <p>{t('savedSessionBody', { status: connectionLabel(connection) })}</p>
                 <div className="composer-btns">
                   <button
                     className="primary"
@@ -507,14 +488,10 @@ export function App() {
                     disabled={connection === 'connecting'}
                     onClick={() => void client.connect({ force: true })}
                   >
-                    Reconectar
+                    {t('reconnect')}
                   </button>
-                  <button
-                    className="ghost"
-                    type="button"
-                    onClick={() => client.clearCredential()}
-                  >
-                    Desemparejar
+                  <button className="ghost" type="button" onClick={() => client.clearCredential()}>
+                    {t('unpair')}
                   </button>
                 </div>
               </div>
@@ -527,12 +504,12 @@ export function App() {
                   activities={client.activities}
                   loading={client.chatLoading}
                   status={selected.status}
-                  workingLine={selected.status === 'running' ? selected.lastLine : ''}
+                  workingLine={selected.status === 'running' ? threadLine(selected) : ''}
                 />
                 <div className="composer">
                   <textarea
                     value={draft}
-                    placeholder={`Responder a “${selected.title}”…`}
+                    placeholder={t('replyPlaceholder', { title: threadTitle(selected) })}
                     disabled={busy || connection !== 'online'}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
@@ -543,7 +520,7 @@ export function App() {
                     }}
                   />
                   <div className="composer-actions">
-                    <span className="hint">{sendError || 'Enter envía · Shift+Enter salto'}</span>
+                    <span className="hint">{sendError || t('composerHint')}</span>
                     <div className="composer-btns">
                       {selected.status === 'running' ? (
                         <button
@@ -553,7 +530,7 @@ export function App() {
                           onClick={() => void onInterrupt()}
                         >
                           <SolarIcon name="stop" size={15} />
-                          Parar
+                          {t('stop')}
                         </button>
                       ) : null}
                       <button
@@ -563,7 +540,7 @@ export function App() {
                         onClick={() => void onSend()}
                       >
                         <SolarIcon name="send" size={15} />
-                        Enviar
+                        {t('send')}
                       </button>
                     </div>
                   </div>
@@ -573,25 +550,23 @@ export function App() {
               <div className="thread-list">
                 {threads.length === 0 ? (
                   <div className="empty">
-                    {connection === 'online'
-                      ? 'No hay hilos abiertos (unsettled) en T3.'
-                      : 'Esperando enlace con T3…'}
+                    {connection === 'online' ? t('emptyUnsettled') : t('waitingT3')}
                     {client.hasCredential() ? (
                       <>
                         {' '}
                         <button className="linkish" type="button" onClick={() => client.clearCredential()}>
-                          Desemparejar
+                          {t('unpair')}
                         </button>
                       </>
                     ) : null}
                   </div>
                 ) : (
-                  threads.map((t) => (
+                  threads.map((row) => (
                     <ThreadRow
-                      key={t.id}
-                      thread={t}
+                      key={row.id}
+                      thread={row}
                       now={now}
-                      onSelect={() => openThread(t.id)}
+                      onSelect={() => openThread(row.id)}
                     />
                   ))
                 )}
@@ -602,16 +577,16 @@ export function App() {
 
         <div className="footer-keys">
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> ocultar
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> {t('footerHide')}
           </span>
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> panel
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> {t('footerPanel')}
           </span>
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> pulsar overlay
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> {t('footerClick')}
           </span>
           <span>
-            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> mover
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> {t('footerMove')}
           </span>
         </div>
       </section>
@@ -628,24 +603,31 @@ function ThreadRow({
   now: number
   onSelect: () => void
 }) {
+  const { t } = useSettings()
   const time = thread.status === 'running' ? formatElapsed(thread.startedAt, now) : null
+  const statusLabel =
+    thread.status === 'idle'
+      ? t('statusIdle')
+      : thread.status === 'running'
+        ? t('statusRunning')
+        : thread.status === 'error'
+          ? t('statusError')
+          : t('statusUnknown')
   return (
     <button type="button" className={`dock-row dock-${thread.status}`} onClick={onSelect}>
       <span className={`strip-dot strip-dot-${thread.status}`} aria-hidden />
-      <span className="strip-name">{thread.title}</span>
-      <span className={`strip-status strip-status-${thread.status}`}>
-        {statusLabel[thread.status] ?? statusLabel.unknown}
-      </span>
+      <span className="strip-name">{thread.title || t('fallbackThread')}</span>
+      <span className={`strip-status strip-status-${thread.status}`}>{statusLabel}</span>
       {time ? <span className="strip-time">{time}</span> : null}
     </button>
   )
 }
 
-const toneLabel: Record<ActivityTone, string> = {
-  tool: 'Herramienta',
-  approval: 'Aprobación',
-  error: 'Error',
-  info: 'Actividad',
+const toneKey: Record<ActivityTone, MsgKey> = {
+  tool: 'toneTool',
+  approval: 'toneApproval',
+  error: 'toneError',
+  info: 'toneInfo',
 }
 
 const toneIcon: Record<ActivityTone, 'tool' | 'approval' | 'warning' | 'info'> = {
@@ -683,6 +665,7 @@ function buildFeed(messages: ChatMessage[], activities: ThreadActivity[]): FeedI
 }
 
 function ActivityCard({ activity }: { activity: ThreadActivity }) {
+  const { t } = useSettings()
   const body = [activity.command, activity.files.join('\n'), activity.detail]
     .filter(Boolean)
     .join('\n\n')
@@ -692,7 +675,7 @@ function ActivityCard({ activity }: { activity: ThreadActivity }) {
     <div className={`activity activity-${activity.tone}`}>
       <div className="activity-head">
         <SolarIcon name={toneIcon[activity.tone]} size={14} />
-        <span className="activity-kicker">{toneLabel[activity.tone]}</span>
+        <span className="activity-kicker">{t(toneKey[activity.tone])}</span>
         <span className="activity-title">{activity.title}</span>
       </div>
       {activity.command ? <pre className="activity-command">{activity.command}</pre> : null}
@@ -702,7 +685,7 @@ function ActivityCard({ activity }: { activity: ThreadActivity }) {
       {activity.detail ? (
         long ? (
           <details>
-            <summary>Ver salida completa</summary>
+            <summary>{t('seeFullOutput')}</summary>
             <pre className="activity-detail">{activity.detail}</pre>
           </details>
         ) : (
@@ -726,6 +709,7 @@ function Transcript({
   status: AgentThread['status']
   workingLine: string
 }) {
+  const { t } = useSettings()
   const feed = useMemo(() => buildFeed(messages, activities), [messages, activities])
   const scroller = useRef<HTMLDivElement>(null)
   const last = feed.at(-1)
@@ -739,16 +723,16 @@ function Transcript({
   return (
     <div className="transcript" ref={scroller}>
       {loading && feed.length === 0 ? (
-        <div className="transcript-empty">Cargando conversación…</div>
+        <div className="transcript-empty">{t('loadingChat')}</div>
       ) : feed.length === 0 ? (
         <div className="transcript-empty">
-          {status === 'running' ? 'El agente está trabajando. Aún no hay texto.' : 'Sin mensajes todavía.'}
+          {status === 'running' ? t('agentWorkingNoText') : t('noMessagesYet')}
         </div>
       ) : (
         feed.map((item) =>
           item.kind === 'message' ? (
             <div key={item.key} className={`bubble bubble-${item.message.role}`}>
-              <span className="bubble-role">{item.message.role === 'user' ? 'Tú' : 'Agente'}</span>
+              <span className="bubble-role">{item.message.role === 'user' ? t('you') : t('agent')}</span>
               <p>{item.message.text}</p>
             </div>
           ) : (
@@ -760,7 +744,7 @@ function Transcript({
         <div className="activity activity-info working-line">
           <div className="activity-head">
             <SolarIcon name="info" size={14} />
-            <span className="activity-kicker">Ahora</span>
+            <span className="activity-kicker">{t('now')}</span>
             <span className="activity-title">{workingLine}</span>
           </div>
         </div>
