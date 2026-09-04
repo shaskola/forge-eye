@@ -1,10 +1,29 @@
-node_modules
-dist
-dist-electron
-release
-*.log
-.DS_Store
-.env
-.env.*
+# Dependencias
+node_modules/
+
+# Builds e instaladores
+dist/
+dist-electron/
+release/
+out/
 *.exe
 *.blockmap
+*.asar
+
+# Secretos y logs
+.env
+.env.*
+*.log
+npm-debug.log*
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# Capturas locales de prueba (las del README viven en docs/)
+.evidence/
