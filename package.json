@@ -2,6 +2,7 @@
   "name": "forge-eye",
   "version": "0.1.2",
   "private": true,
+  "license": "MIT",
   "description": "Desktop overlay to see and talk to T3 Code agents while you play",
   "author": "shaskola",
   "homepage": "https://github.com/shaskola/forge-eye",

@@ -11,6 +11,13 @@ import {
 import fs from 'node:fs'
 import path from 'node:path'
 import { DEFAULT_LOCALE, parseLocale, translate, type Locale } from '../src/i18n/catalog'
+import {
+  type Anchor,
+  DEFAULT_MARGIN,
+  anchorFromBounds,
+  boundsFromAnchor,
+  defaultAnchor,
+} from './layout'
 
 type StoredSession = {
   accessToken: string
@@ -53,6 +60,8 @@ function clearSessionFile() {
 type StoredSettings = {
   opacity: number
   locale: Locale
+  anchorX: number | null
+  anchorBottom: number | null
 }
 
 const DEFAULT_OPACITY = 0.7
@@ -60,6 +69,11 @@ const DEFAULT_OPACITY = 0.7
 function clampOpacity(n: number) {
   if (!Number.isFinite(n)) return DEFAULT_OPACITY
   return Math.min(1, Math.max(0.25, Math.round(n * 100) / 100))
+}
+
+function parseAnchorCoord(n: unknown): number | null {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null
+  return Math.round(n)
 }
 
 function settingsPath() {
@@ -73,21 +87,41 @@ function readSettings(): StoredSettings {
     return {
       opacity: clampOpacity(Number(parsed.opacity)),
       locale: parseLocale(parsed.locale),
+      anchorX: parseAnchorCoord(parsed.anchorX),
+      anchorBottom: parseAnchorCoord(parsed.anchorBottom),
     }
   } catch {
-    return { opacity: DEFAULT_OPACITY, locale: DEFAULT_LOCALE }
+    return {
+      opacity: DEFAULT_OPACITY,
+      locale: DEFAULT_LOCALE,
+      anchorX: null,
+      anchorBottom: null,
+    }
   }
 }
 
 function writeSettings(settings: StoredSettings) {
-  fs.writeFileSync(
-    settingsPath(),
-    JSON.stringify({
-      opacity: clampOpacity(settings.opacity),
-      locale: parseLocale(settings.locale),
-    }),
-    'utf8',
-  )
+  const payload: Record<string, unknown> = {
+    opacity: clampOpacity(settings.opacity),
+    locale: parseLocale(settings.locale),
+  }
+  if (settings.anchorX != null && settings.anchorBottom != null) {
+    payload.anchorX = Math.round(settings.anchorX)
+    payload.anchorBottom = Math.round(settings.anchorBottom)
+  }
+  fs.writeFileSync(settingsPath(), JSON.stringify(payload), 'utf8')
+}
+
+function patchSettings(patch: Partial<StoredSettings>): StoredSettings {
+  const current = readSettings()
+  const next: StoredSettings = {
+    opacity: patch.opacity != null ? clampOpacity(Number(patch.opacity)) : current.opacity,
+    locale: patch.locale != null ? parseLocale(patch.locale) : current.locale,
+    anchorX: patch.anchorX !== undefined ? parseAnchorCoord(patch.anchorX) : current.anchorX,
+    anchorBottom: patch.anchorBottom !== undefined ? parseAnchorCoord(patch.anchorBottom) : current.anchorBottom,
+  }
+  writeSettings(next)
+  return next
 }
 
 const PANEL_W = 380
@@ -97,7 +131,7 @@ const DOCK_W = 360
 const DOCK_ROW = 40
 const DOCK_PAD = 8
 const DOCK_MAX_ROWS = 9
-const MARGIN = 24
+const MARGIN = DEFAULT_MARGIN
 
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -109,23 +143,95 @@ let dockRows = 1
 let panelMode: 'list' | 'chat' = 'list'
 let uiHidden = false
 let currentLocale: Locale = DEFAULT_LOCALE
+/** Bottom-left of the overlay. Null = default bottom-left of the primary screen. */
+let anchor: Anchor | null = null
+let persistAnchorTimer: ReturnType<typeof setTimeout> | null = null
 
 function dockHeight(rows: number) {
   const n = Math.max(1, Math.min(DOCK_MAX_ROWS, rows))
   return DOCK_PAD + n * DOCK_ROW
 }
 
-function placeBottomLeft(width: number, height: number) {
-  const display = screen.getPrimaryDisplay()
-  const { workArea } = display
-  const maxH = Math.max(120, workArea.height - MARGIN * 2)
-  const h = Math.min(height, maxH)
-  return {
-    x: Math.round(workArea.x + MARGIN),
-    y: Math.round(workArea.y + workArea.height - h - MARGIN),
-    width,
-    height: h,
+function targetSize() {
+  if (expanded) {
+    return { width: PANEL_W, height: panelMode === 'chat' ? CHAT_H : PANEL_H }
   }
+  return { width: DOCK_W, height: dockHeight(dockRows) }
+}
+
+function workAreaFor(nextAnchor: Anchor | null) {
+  if (nextAnchor) {
+    return screen.getDisplayNearestPoint({
+      x: Math.round(nextAnchor.x),
+      y: Math.round(nextAnchor.bottom - 8),
+    }).workArea
+  }
+  return screen.getPrimaryDisplay().workArea
+}
+
+function layoutBounds() {
+  const size = targetSize()
+  const area = workAreaFor(anchor)
+  const nextAnchor = anchor ?? defaultAnchor(area, MARGIN)
+  return boundsFromAnchor(nextAnchor, size.width, size.height, area)
+}
+
+function captureAnchor() {
+  if (!win) return
+  anchor = anchorFromBounds(win.getBounds())
+}
+
+function persistAnchorSoon() {
+  if (!anchor) return
+  if (persistAnchorTimer) clearTimeout(persistAnchorTimer)
+  persistAnchorTimer = setTimeout(() => {
+    persistAnchorTimer = null
+    if (!anchor) return
+    patchSettings({ anchorX: anchor.x, anchorBottom: anchor.bottom })
+  }, 300)
+}
+
+function loadSavedAnchor() {
+  const stored = readSettings()
+  if (stored.anchorX != null && stored.anchorBottom != null) {
+    anchor = { x: stored.anchorX, bottom: stored.anchorBottom }
+  }
+}
+
+function onWindowMoved() {
+  if (!win) return
+  captureAnchor()
+  persistAnchorSoon()
+}
+
+function setDockRows(next: number) {
+  const rows = Math.max(1, Math.min(DOCK_MAX_ROWS, Math.round(next) || 1))
+  if (rows === dockRows) {
+    if (!expanded && win) layoutWindow()
+    return
+  }
+  dockRows = rows
+  if (!expanded) setExpanded(false)
+}
+
+function layoutWindow() {
+  if (!win) return
+  win.setBounds(layoutBounds(), false)
+}
+
+function applyBounds(opts?: { focus?: boolean }) {
+  if (!win) return
+  if (win.isVisible()) captureAnchor()
+  layoutWindow()
+  if (uiHidden) return
+  win.setAlwaysOnTop(true, 'screen-saver')
+  if (!win.isVisible()) {
+    if (wantsPassthrough()) win.showInactive()
+    else win.show()
+  }
+  win.moveTop()
+  // moveTop/show pueden devolver el hit-test en Windows: reaplicar al final.
+  applyMousePassthrough(opts)
 }
 
 function wantsPassthrough(): boolean {
@@ -146,36 +252,6 @@ function applyMousePassthrough(opts?: { focus?: boolean }) {
     if (opts?.focus) win.focus()
   }
   console.log('[forge-eye] passthrough', ignore, { expanded, clickThrough, dragMode })
-}
-
-function setDockRows(next: number) {
-  const rows = Math.max(1, Math.min(DOCK_MAX_ROWS, Math.round(next) || 1))
-  if (rows === dockRows) {
-    if (!expanded && win) {
-      const size = placeBottomLeft(DOCK_W, dockHeight(dockRows))
-      win.setBounds(size, false)
-    }
-    return
-  }
-  dockRows = rows
-  if (!expanded) setExpanded(false)
-}
-
-function applyBounds(opts?: { focus?: boolean }) {
-  if (!win) return
-  const size = expanded
-    ? placeBottomLeft(PANEL_W, panelMode === 'chat' ? CHAT_H : PANEL_H)
-    : placeBottomLeft(DOCK_W, dockHeight(dockRows))
-  win.setBounds(size, false)
-  if (uiHidden) return
-  win.setAlwaysOnTop(true, 'screen-saver')
-  if (!win.isVisible()) {
-    if (wantsPassthrough()) win.showInactive()
-    else win.show()
-  }
-  win.moveTop()
-  // moveTop/show pueden devolver el hit-test en Windows: reaplicar al final.
-  applyMousePassthrough(opts)
 }
 
 function setPanelMode(next: 'list' | 'chat') {
@@ -272,7 +348,7 @@ function toggleClickThrough() {
 }
 
 function createWindow() {
-  const bounds = placeBottomLeft(PANEL_W, PANEL_H)
+  const bounds = layoutBounds()
   win = new BrowserWindow({
     ...bounds,
     show: false,
@@ -313,6 +389,7 @@ function createWindow() {
     console.log('[forge-eye] bounds', win.getBounds())
   })
 
+  win.on('moved', onWindowMoved)
   win.on('focus', () => {
     if (wantsPassthrough()) applyMousePassthrough()
   })
@@ -398,10 +475,15 @@ function registerShortcuts() {
 }
 
 app.whenReady().then(() => {
-  currentLocale = readSettings().locale
+  const stored = readSettings()
+  currentLocale = stored.locale
+  loadSavedAnchor()
   createWindow()
   createTray()
   registerShortcuts()
+  screen.on('display-metrics-changed', () => {
+    if (win && !uiHidden) applyBounds()
+  })
 
   ipcMain.handle('forge:get-state', () => ({
     expanded,
@@ -433,12 +515,7 @@ app.whenReady().then(() => {
   ipcMain.handle('forge:get-settings', () => readSettings())
 
   ipcMain.handle('forge:set-settings', (_e, patch: Partial<StoredSettings>) => {
-    const current = readSettings()
-    const next: StoredSettings = {
-      opacity: clampOpacity(Number(patch?.opacity ?? current.opacity)),
-      locale: parseLocale(patch?.locale ?? current.locale),
-    }
-    writeSettings(next)
+    const next = patchSettings(patch)
     if (next.locale !== currentLocale) {
       currentLocale = next.locale
       applyTrayMenu()

@@ -41,7 +41,7 @@ The game must be in **borderless window**. Exclusive fullscreen usually covers t
 | Send message | `Enter` |
 | New line in the message | `Shift+Enter` |
 
-Starting position: bottom-left corner. System tray icon to show the panel or quit.
+Starting position: bottom-left corner. If you move the panel, it stays there — the compact bar uses the same spot.
 
 Opacity is adjusted in the **Settings** gear (it is saved). By default the overlay lets clicks through to the game; `Ctrl+Shift+C` makes it clickable.
 
@@ -104,3 +104,7 @@ npm run dist
 ```
 
 The files land in `release/ForgeEye-Setup-….exe` and `release/ForgeEye-Portable-….exe`.
+
+## License
+
+[MIT](LICENSE)
