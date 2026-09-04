@@ -7,8 +7,14 @@ files:
   - dist
   - dist-electron
   - package.json
+  - build/icon.ico
+  - build/icon.png
 asar: true
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
@@ -25,3 +31,7 @@ nsis:
   artifactName: ForgeEye-Setup-${version}.${ext}
 portable:
   artifactName: ForgeEye-Portable-${version}.${ext}
+publish:
+  provider: github
+  owner: shaskola
+  repo: forge-eye

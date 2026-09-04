@@ -93,6 +93,22 @@ function useForgeWindow() {
   }
 }
 
+function useAppUpdate() {
+  const [status, setStatus] = useState({
+    state: 'idle' as const,
+    version: '',
+  } as NonNullable<Awaited<ReturnType<NonNullable<Window['forge']>['getUpdate']>>>)
+
+  useEffect(() => {
+    const api = window.forge
+    if (!api?.getUpdate) return
+    void api.getUpdate().then(setStatus)
+    return api.onUpdate(setStatus)
+  }, [])
+
+  return status
+}
+
 function useT3() {
   const [client] = useState(() => new T3Client())
   const [, setTick] = useState(0)
@@ -118,6 +134,7 @@ export function App() {
   const forge = useForgeWindow()
   const { client } = useT3()
   const { t, locale, opacity, setOpacity, setLocale } = useSettings()
+  const update = useAppUpdate()
   const [openId, setOpenId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -151,6 +168,22 @@ export function App() {
   }
   const fail = (err: unknown, fallback: MsgKey) => formatUnknownError(locale, err, fallback)
   const storedError = formatStoredError(locale, client.lastErrorKey, client.lastErrorParams, client.lastErrorRaw)
+  const updateText =
+    update.state === 'ready'
+      ? t('updateReady', { version: update.nextVersion || update.version })
+      : update.state === 'checking'
+        ? t('updateChecking')
+        : update.state === 'downloading'
+          ? t('updateDownloading', { percent: update.percent ?? 0 })
+          : update.state === 'available'
+            ? t('updateAvailable', { version: update.nextVersion || update.version })
+            : update.state === 'unavailable'
+              ? t('updateUnavailable')
+              : update.state === 'dev'
+                ? t('updateDev')
+                : update.state === 'error'
+                  ? t('updateError')
+                  : t('updateIdle')
 
   const threads = client.threads
   const connection = client.connection
@@ -172,14 +205,11 @@ export function App() {
     if (!forge.expanded) window.forge?.setDockRows(dockRows)
   }, [forge.expanded, dockRows])
 
-  useEffect(() => {
-    if (openId && !threads.some((row) => row.id === openId)) {
-      client.closeThread()
-      setOpenId(null)
-    }
-  }, [threads, openId, client])
-
-  const selected = threads.find((row) => row.id === openId) ?? null
+  const liveSelected = threads.find((row) => row.id === openId) ?? null
+  const selectedHold = useRef<AgentThread | null>(null)
+  if (liveSelected) selectedHold.current = liveSelected
+  else if (selectedHold.current?.id !== openId) selectedHold.current = null
+  const selected = liveSelected ?? selectedHold.current
 
   useEffect(() => {
     if (!forge.expanded) {
@@ -189,8 +219,8 @@ export function App() {
       }
       return
     }
-    window.forge?.setPanelMode(selected ? 'chat' : 'list')
-  }, [selected, forge.expanded, openId, client])
+    window.forge?.setPanelMode(openId ? 'chat' : 'list')
+  }, [forge.expanded, openId, client])
 
   function openThread(id: string) {
     setSendError('')
@@ -423,6 +453,36 @@ export function App() {
                 </button>
               </div>
             </div>
+            <div className="settings-row settings-update">
+              <span>
+                {t('updateCurrent', { version: update.version || '—' })}
+                {' · '}
+                {updateText}
+              </span>
+              {update.state === 'ready' ? (
+                <button type="button" className="refresh-text-btn" onClick={() => window.forge?.installUpdate()}>
+                  {t('updateRestart')}
+                </button>
+              ) : update.state === 'dev' ? null : (
+                <button
+                  type="button"
+                  className="refresh-text-btn"
+                  disabled={update.state === 'checking' || update.state === 'downloading'}
+                  onClick={() => window.forge?.checkUpdate()}
+                >
+                  {t('updateCheck')}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {update.state === 'ready' ? (
+          <div className="update-bar">
+            <span>{t('updateReady', { version: update.nextVersion || update.version })}</span>
+            <button type="button" className="refresh-text-btn" onClick={() => window.forge?.installUpdate()}>
+              {t('updateRestart')}
+            </button>
           </div>
         ) : null}
 

@@ -27,6 +27,8 @@ Agent chat, with tools and a reply:
 5. In T3: **Settings → Connections → Create Link**. Copy the link.
 6. In Forge Eye paste the link and pair once. The session is saved; you do not need to repeat this every time.
 
+Both the **Setup** installer and the **portable EXE** can update themselves from GitHub Releases. When a new version is ready, Forge Eye shows a Restart button. The portable file is replaced in place; the installed copy uses the Windows installer update.
+
 The game must be in **borderless window**. Exclusive fullscreen usually covers the overlay.
 
 ### Shortcuts

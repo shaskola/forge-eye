@@ -18,6 +18,7 @@ import {
   boundsFromAnchor,
   defaultAnchor,
 } from './layout'
+import { setupAutoUpdate } from './updater'
 
 type StoredSession = {
   accessToken: string
@@ -146,6 +147,7 @@ let currentLocale: Locale = DEFAULT_LOCALE
 /** Bottom-left of the overlay. Null = default bottom-left of the primary screen. */
 let anchor: Anchor | null = null
 let persistAnchorTimer: ReturnType<typeof setTimeout> | null = null
+let lastPassthrough: boolean | null = null
 
 function dockHeight(rows: number) {
   const n = Math.max(1, Math.min(DOCK_MAX_ROWS, rows))
@@ -214,22 +216,32 @@ function setDockRows(next: number) {
   if (!expanded) setExpanded(false)
 }
 
+function sameBounds(a: { x: number; y: number; width: number; height: number }, b: typeof a) {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 function layoutWindow() {
-  if (!win) return
-  win.setBounds(layoutBounds(), false)
+  if (!win) return false
+  const next = layoutBounds()
+  const current = win.getBounds()
+  if (sameBounds(current, next)) return false
+  win.setBounds(next, false)
+  return true
 }
 
 function applyBounds(opts?: { focus?: boolean }) {
   if (!win) return
   if (win.isVisible()) captureAnchor()
-  layoutWindow()
+  const moved = layoutWindow()
   if (uiHidden) return
   win.setAlwaysOnTop(true, 'screen-saver')
   if (!win.isVisible()) {
     if (wantsPassthrough()) win.showInactive()
     else win.show()
+    win.moveTop()
+  } else if (moved) {
+    win.moveTop()
   }
-  win.moveTop()
   // moveTop/show pueden devolver el hit-test en Windows: reaplicar al final.
   applyMousePassthrough(opts)
 }
@@ -242,6 +254,8 @@ function wantsPassthrough(): boolean {
 function applyMousePassthrough(opts?: { focus?: boolean }) {
   if (!win) return
   const ignore = wantsPassthrough()
+  if (lastPassthrough === ignore && !opts?.focus) return
+  lastPassthrough = ignore
   if (ignore) {
     if (win.isFocused()) win.blur()
     win.setFocusable(false)
@@ -255,7 +269,9 @@ function applyMousePassthrough(opts?: { focus?: boolean }) {
 }
 
 function setPanelMode(next: 'list' | 'chat') {
-  panelMode = next === 'chat' ? 'chat' : 'list'
+  const mode = next === 'chat' ? 'chat' : 'list'
+  if (mode === panelMode) return
+  panelMode = mode
   if (expanded) applyBounds()
 }
 
@@ -439,13 +455,33 @@ function applyTrayMenu() {
   )
 }
 
+function resolveAppIconPath() {
+  const names = ['icon.ico', 'icon.png']
+  const dirs = [
+    path.join(app.getAppPath(), 'build'),
+    path.join(__dirname, '..', 'build'),
+    process.resourcesPath,
+  ]
+  for (const dir of dirs) {
+    for (const name of names) {
+      const file = path.join(dir, name)
+      if (fs.existsSync(file)) return file
+    }
+  }
+  return null
+}
+
+function loadAppIcon() {
+  const file = resolveAppIconPath()
+  if (!file) return nativeImage.createEmpty()
+  const icon = nativeImage.createFromPath(file)
+  if (!icon.isEmpty()) return icon
+  return nativeImage.createEmpty()
+}
+
 function createTray() {
-  const png = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAOklEQVQ4T2NkYGD4z0ABYBzVMKoBBgYGBv+/DAwMjP8ZGBhGNYxqGPgG/P8PMkBq1KgGBgYGhv8MDAwA3h8EAZ6xV24AAAAASUVORK5CYII=',
-    'base64',
-  )
-  const icon = nativeImage.createFromBuffer(png)
-  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
+  const icon = loadAppIcon()
+  tray = new Tray(icon)
   tray.setToolTip('Forge Eye')
   applyTrayMenu()
   tray.on('click', () => reveal({ interactive: true }))
@@ -481,6 +517,7 @@ app.whenReady().then(() => {
   createWindow()
   createTray()
   registerShortcuts()
+  setupAutoUpdate(() => win)
   screen.on('display-metrics-changed', () => {
     if (win && !uiHidden) applyBounds()
   })

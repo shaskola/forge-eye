@@ -97,6 +97,17 @@ const en = {
   trayQuit: 'Quit',
   langEnglish: 'English',
   langSpanish: 'Español',
+  updateReady: 'Update {version} is ready',
+  updateRestart: 'Restart',
+  updateChecking: 'Checking for updates…',
+  updateDownloading: 'Downloading update… {percent}%',
+  updateAvailable: 'Update {version} found',
+  updateIdle: 'Automatic updates are on',
+  updateCurrent: 'Version {version}',
+  updateUnavailable: 'You are up to date',
+  updateDev: 'Updates run in the installed app, not in development.',
+  updateError: 'Could not check for updates',
+  updateCheck: 'Check now',
 } as const
 
 const es: { [K in keyof typeof en]: string } = {
@@ -195,6 +206,17 @@ const es: { [K in keyof typeof en]: string } = {
   trayQuit: 'Salir',
   langEnglish: 'English',
   langSpanish: 'Español',
+  updateReady: 'La actualización {version} está lista',
+  updateRestart: 'Reiniciar',
+  updateChecking: 'Buscando actualizaciones…',
+  updateDownloading: 'Descargando actualización… {percent}%',
+  updateAvailable: 'Se encontró la actualización {version}',
+  updateIdle: 'Las actualizaciones automáticas están activas',
+  updateCurrent: 'Versión {version}',
+  updateUnavailable: 'Ya estás al día',
+  updateDev: 'Las actualizaciones funcionan en la app instalada, no en desarrollo.',
+  updateError: 'No se pudo buscar actualizaciones',
+  updateCheck: 'Buscar ahora',
 }
 
 export const catalog: Record<Locale, { [K in keyof typeof en]: string }> = { en, es }

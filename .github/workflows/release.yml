@@ -32,6 +32,8 @@ jobs:
           path: |
             release/ForgeEye-Setup-*.exe
             release/ForgeEye-Portable-*.exe
+            release/latest.yml
+            release/*.blockmap
           if-no-files-found: error
 
       - name: Publicar GitHub Release
@@ -41,6 +43,8 @@ jobs:
           files: |
             release/ForgeEye-Setup-*.exe
             release/ForgeEye-Portable-*.exe
+            release/latest.yml
+            release/*.blockmap
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

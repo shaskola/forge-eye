@@ -371,6 +371,33 @@ textarea {
   color: var(--text);
 }
 
+.settings-update {
+  align-items: flex-start;
+}
+
+.settings-update span {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.update-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.update-bar .refresh-text-btn {
+  flex-shrink: 0;
+}
+
 .header-start {
   display: flex;
   align-items: center;

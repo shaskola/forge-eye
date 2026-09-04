@@ -16,6 +16,22 @@ export type ForgeSettings = {
   locale: 'en' | 'es'
 }
 
+export type ForgeUpdateStatus = {
+  state:
+    | 'dev'
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'downloading'
+    | 'ready'
+    | 'unavailable'
+    | 'error'
+  version: string
+  nextVersion?: string
+  percent?: number
+  error?: string
+}
+
 export type ForgeBridge = {
   getState: () => Promise<ForgeState>
   setExpanded: (expanded: boolean) => void
@@ -32,6 +48,10 @@ export type ForgeBridge = {
   clearSession: () => Promise<boolean>
   getSettings: () => Promise<ForgeSettings>
   setSettings: (settings: Partial<ForgeSettings>) => Promise<ForgeSettings>
+  getUpdate: () => Promise<ForgeUpdateStatus>
+  checkUpdate: () => void
+  installUpdate: () => void
+  onUpdate: (cb: (status: ForgeUpdateStatus) => void) => () => void
 }
 
 const bridge: ForgeBridge = {
@@ -62,6 +82,14 @@ const bridge: ForgeBridge = {
   clearSession: () => ipcRenderer.invoke('forge:clear-session'),
   getSettings: () => ipcRenderer.invoke('forge:get-settings'),
   setSettings: (settings) => ipcRenderer.invoke('forge:set-settings', settings),
+  getUpdate: () => ipcRenderer.invoke('forge:get-update'),
+  checkUpdate: () => ipcRenderer.send('forge:check-update'),
+  installUpdate: () => ipcRenderer.send('forge:install-update'),
+  onUpdate: (cb) => {
+    const listener = (_: unknown, value: ForgeUpdateStatus) => cb(value)
+    ipcRenderer.on('forge:update', listener)
+    return () => ipcRenderer.removeListener('forge:update', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('forge', bridge)

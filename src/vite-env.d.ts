@@ -20,6 +20,40 @@ declare global {
       clearSession: () => Promise<boolean>
       getSettings: () => Promise<{ opacity: number; locale: 'en' | 'es' }>
       setSettings: (settings: { opacity?: number; locale?: 'en' | 'es' }) => Promise<{ opacity: number; locale: 'en' | 'es' }>
+      getUpdate: () => Promise<{
+        state:
+          | 'dev'
+          | 'idle'
+          | 'checking'
+          | 'available'
+          | 'downloading'
+          | 'ready'
+          | 'unavailable'
+          | 'error'
+        version: string
+        nextVersion?: string
+        percent?: number
+        error?: string
+      }>
+      checkUpdate: () => void
+      installUpdate: () => void
+      onUpdate: (
+        cb: (status: {
+          state:
+            | 'dev'
+            | 'idle'
+            | 'checking'
+            | 'available'
+            | 'downloading'
+            | 'ready'
+            | 'unavailable'
+            | 'error'
+          version: string
+          nextVersion?: string
+          percent?: number
+          error?: string
+        }) => void,
+      ) => () => void
     }
   }
 }

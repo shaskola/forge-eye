@@ -918,7 +918,7 @@ export class T3Client {
       const openId = this.openThreadId
       this.threadRequestId = null
       if (openId && this.ws?.readyState === WebSocket.OPEN && this.connection === 'online') {
-        this.openThread(openId)
+        this.openThread(openId, { keepChat: true })
       }
     }
   }
@@ -961,7 +961,7 @@ export class T3Client {
     const openId = this.openThreadId
     const wait = this.waitForSnapshot(5000)
     this.subscribeShell({ force: true })
-    if (openId) this.openThread(openId)
+    if (openId) this.openThread(openId, { keepChat: true })
     await wait
   }
 
@@ -969,14 +969,19 @@ export class T3Client {
     await this.refresh()
   }
 
-  openThread(threadId: string) {
+  openThread(threadId: string, opts?: { keepChat?: boolean }) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
-    this.closeThread()
-    this.openThreadId = threadId
-    this.chatLoading = true
-    this.messages = []
-    this.activities = []
-    this.emit()
+    const keepChat = Boolean(opts?.keepChat) && this.openThreadId === threadId
+    if (keepChat) {
+      this.interruptRequest(this.threadRequestId)
+    } else {
+      this.closeThread()
+      this.openThreadId = threadId
+      this.chatLoading = true
+      this.messages = []
+      this.activities = []
+      this.emit()
+    }
     const id = uuid()
     this.threadRequestId = id
     this.ws.send(
