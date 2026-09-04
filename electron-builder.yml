@@ -1,0 +1,27 @@
+appId: app.forgeeye.overlay
+productName: Forge Eye
+copyright: Copyright © 2026
+directories:
+  output: release
+files:
+  - dist
+  - dist-electron
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  signExecutable: false
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: Forge Eye
+  uninstallDisplayName: Forge Eye
+  artifactName: ForgeEye-Setup-${version}.${ext}
+portable:
+  artifactName: ForgeEye-Portable-${version}.${ext}
