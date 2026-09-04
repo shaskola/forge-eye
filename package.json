@@ -1,6 +1,6 @@
 {
   "name": "forge-eye",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Overlay de escritorio para ver y hablar con agentes de T3 Code mientras juegas",
   "author": "shaskola",
